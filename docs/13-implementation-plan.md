@@ -1,6 +1,7 @@
 # Implementation plan
 
-Status: M0, M1, and M2 are implemented. Row-history work is in progress.
+Status: M0, M1, M2, and M3 are implemented. Public transaction and snapshot
+work is in progress.
 
 The first goal is a small, testable vertical slice that proves the layout,
 payload lifetime, row-chain resolution, and commit publication rules before
@@ -84,6 +85,10 @@ Acceptance: block allocation constructs zero `T` objects; explicit release
 returns storage; final teardown destroys every live payload exactly once.
 
 ### M3: Row history and commit publication
+
+Status: implemented in `detail/row_index.hpp`, `detail/commit_store.hpp`,
+`detail/current_targets.hpp`, `detail/commit_builder.hpp`, and
+`tests/history_test.cpp`.
 
 - Implement row pages with atomic `RowNodeId` heads.
 - Implement `RowNodeChunk` allocation, the chunk directory, and `previous`

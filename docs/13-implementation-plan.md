@@ -1,7 +1,7 @@
 # Implementation plan
 
-Status: M0, M1, M2, and M3 are implemented. Public transaction and snapshot
-work is in progress.
+Status: M0 through M4 are implemented. Pruning, reclamation, and concurrency
+validation remain.
 
 The first goal is a small, testable vertical slice that proves the layout,
 payload lifetime, row-chain resolution, and commit publication rules before
@@ -101,6 +101,13 @@ Acceptance: a commit touching `k` rows creates exactly `k` nodes; a prepare
 failure changes no row head; publish performs no allocation.
 
 ### M4: Snapshots and transactions
+
+Status: implemented in `mvcc_hive.hpp`, `detail/snapshot_registry.hpp`,
+`detail/transaction_overlay.hpp`, and `tests/transaction_test.cpp`.
+
+The first writable-transaction policy requires a transaction to bind to the
+current head. Historical commits remain readable through snapshots, but
+writable rebasing onto a newer head is deferred to the multi-writer work.
 
 - Implement the snapshot guard registry and weak registry references.
 - Implement snapshot resolution by commit-filtered row-chain traversal.

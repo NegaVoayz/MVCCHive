@@ -86,8 +86,20 @@ public:
         assert(previous != 0);
         if (previous == 1) {
             std::lock_guard lock{retirement_mutex_};
+            assert(retired_targets_.capacity() >
+                   retired_targets_.size());
             retired_targets_.push_back(target);
         }
+    }
+
+    // Throwing reservation for every vector a later release/drain may grow.
+    void reserve_reclamation(std::size_t additional) {
+        std::lock_guard lock{retirement_mutex_};
+        retired_targets_.reserve(
+            retired_targets_.size() + additional);
+        available_blocks_.reserve(
+            available_blocks_.size() + additional);
+        free_blocks_.reserve(free_blocks_.size() + additional);
     }
 
     [[nodiscard]] std::optional<
@@ -112,7 +124,7 @@ public:
 
     // Writer-only. Retires targets whose final view was released and releases
     // every block that no longer contains a constructed payload.
-    void drain_retirements() {
+    void drain_retirements() noexcept {
         std::vector<TargetId> retired;
         {
             std::lock_guard lock{retirement_mutex_};
@@ -126,7 +138,7 @@ public:
     }
 
     // Writer-only structural shrink after a history drop.
-    void release_empty_blocks() {
+    void release_empty_blocks() noexcept {
         for (std::uint64_t block_index = 0;
              block_index < owned_blocks_.size();
              ++block_index) {

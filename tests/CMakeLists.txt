@@ -7,6 +7,10 @@ target_link_libraries(mvcc_hive_storage_test PRIVATE mvcc_hive)
 add_executable(mvcc_hive_history_test history_test.cpp)
 target_link_libraries(mvcc_hive_history_test PRIVATE mvcc_hive)
 
+add_executable(mvcc_hive_transaction_test transaction_test.cpp)
+target_link_libraries(mvcc_hive_transaction_test PRIVATE mvcc_hive)
+
 add_test(NAME mvcc_hive_layout COMMAND mvcc_hive_layout_test)
 add_test(NAME mvcc_hive_storage COMMAND mvcc_hive_storage_test)
 add_test(NAME mvcc_hive_history COMMAND mvcc_hive_history_test)
+add_test(NAME mvcc_hive_transaction COMMAND mvcc_hive_transaction_test)

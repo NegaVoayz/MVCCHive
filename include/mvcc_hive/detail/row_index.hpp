@@ -147,6 +147,7 @@ public:
     }
 
     [[nodiscard]] std::size_t row_count() const noexcept {
+        std::shared_lock lock{table_mutex_};
         return row_count_;
     }
 
@@ -174,6 +175,10 @@ private:
             if (chunk_index == 0) {
                 free_bits[0] &= ~std::uint64_t{1};
             }
+            usable_slots_ =
+                chunk_index == 0
+                    ? RowNodeLayout::capacity - 1
+                    : RowNodeLayout::capacity;
         }
 
         [[nodiscard]] std::size_t take_free_slot() noexcept {
@@ -203,11 +208,12 @@ private:
         }
 
         [[nodiscard]] bool is_full() const noexcept {
-            return live_nodes == RowNodeLayout::capacity;
+            return live_nodes == usable_slots_;
         }
 
         std::array<std::uint64_t, free_words> free_bits{};
         std::size_t live_nodes = 0;
+        std::size_t usable_slots_ = 0;
         std::array<RowVersionNode, RowNodeLayout::capacity> nodes{};
     };
 

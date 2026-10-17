@@ -91,6 +91,7 @@ void check_construct_resolve_and_release() {
         REQUIRE(store.resolve(first)->get().address ==
                 first_address);
 
+        store.reserve_reclamation(4);
         store.release_view(first);
         store.release_view(second);
         store.drain_retirements();
@@ -117,6 +118,7 @@ void check_block_release_and_reuse() {
     REQUIRE(store.allocated_block_count() == 1);
     REQUIRE(store.live_slot_count() == 4);
 
+    store.reserve_reclamation(4);
     for (const TargetId target : targets) {
         store.release_view(target);
     }
@@ -128,6 +130,7 @@ void check_block_release_and_reuse() {
     const TargetId reused = store.emplace(1, FourSlotValue{});
     REQUIRE(reused == 0);
     REQUIRE(store.allocated_block_count() == 1);
+    store.reserve_reclamation(1);
     store.release_view(reused);
     store.drain_retirements();
     REQUIRE(store.allocated_block_count() == 0);
@@ -163,6 +166,7 @@ void check_constructor_failure_returns_slot() {
     REQUIRE(threw);
     REQUIRE(store.live_slot_count() == 0);
     REQUIRE(store.allocated_block_count() == 1);
+    store.reserve_reclamation(1);
     store.release_empty_blocks();
     REQUIRE(store.allocated_block_count() == 0);
 }

@@ -125,6 +125,7 @@ void check_block_release_and_reuse() {
     store.drain_retirements();
     REQUIRE(store.live_slot_count() == 0);
     REQUIRE(store.allocated_block_count() == 0);
+    REQUIRE(store.owned_block_slots() == 0);
     REQUIRE(store.directory_page_count() == 0);
 
     const TargetId reused = store.emplace(1, FourSlotValue{});
@@ -134,6 +135,41 @@ void check_block_release_and_reuse() {
     store.release_view(reused);
     store.drain_retirements();
     REQUIRE(store.allocated_block_count() == 0);
+    REQUIRE(store.owned_block_slots() == 0);
+}
+
+void check_scattered_block_release_shrinks_owner() {
+    static_assert(
+        BlockLayout<FourSlotValue>::capacity == 4);
+
+    VersionStore<FourSlotValue> store;
+    TargetId targets[5]{
+        store.emplace(1, FourSlotValue{}),
+        store.emplace(1, FourSlotValue{}),
+        store.emplace(1, FourSlotValue{}),
+        store.emplace(1, FourSlotValue{}),
+        store.emplace(1, FourSlotValue{}),
+    };
+
+    REQUIRE(store.allocated_block_count() == 2);
+    REQUIRE(store.owned_block_slots() == 2);
+    REQUIRE(store.live_slot_count() == 5);
+
+    store.reserve_reclamation(5);
+    for (std::size_t i = 0; i < 4; ++i) {
+        store.release_view(targets[i]);
+    }
+    store.drain_retirements();
+
+    REQUIRE(store.allocated_block_count() == 1);
+    REQUIRE(store.owned_block_slots() == 2);
+    REQUIRE(store.directory_page_count() == 1);
+
+    store.release_view(targets[4]);
+    store.drain_retirements();
+    REQUIRE(store.allocated_block_count() == 0);
+    REQUIRE(store.owned_block_slots() == 0);
+    REQUIRE(store.directory_page_count() == 0);
 }
 
 void check_teardown_destroys_live_payloads() {
@@ -177,6 +213,7 @@ int main() {
     check_block_allocation_is_payload_free();
     check_construct_resolve_and_release();
     check_block_release_and_reuse();
+    check_scattered_block_release_shrinks_owner();
     check_teardown_destroys_live_payloads();
     check_constructor_failure_returns_slot();
 }

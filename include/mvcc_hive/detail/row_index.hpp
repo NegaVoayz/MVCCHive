@@ -2,6 +2,7 @@
 
 #include <mvcc_hive/detail/layout.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -14,12 +15,33 @@
 #include <optional>
 #include <shared_mutex>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace mvcc_hive::detail {
 
 class RowIndex {
 public:
+    class PrunePlan {
+    public:
+        [[nodiscard]] const std::vector<TargetId>& released_targets()
+            const noexcept {
+            return released_targets_;
+        }
+
+    private:
+        friend class RowIndex;
+
+        struct TailLink {
+            RowNodeId tail;
+            RowNodeId first_released;
+        };
+
+        std::vector<TailLink> links_;
+        std::vector<RowNodeId> release_nodes_;
+        std::vector<TargetId> released_targets_;
+    };
+
     static constexpr std::size_t row_page_capacity = 256;
     static_assert(std::has_single_bit(row_page_capacity));
 
@@ -111,20 +133,85 @@ public:
         }
 
         std::unique_lock lock{node_mutex_};
-        const std::uint64_t chunk_index =
-            RowNodeLayout::chunk_index(node_id);
-        if (chunk_index >= chunks_.size() || !chunks_[chunk_index]) {
-            return;
-        }
+        release_node_locked(node_id);
+    }
 
-        RowNodeChunk& chunk = *chunks_[chunk_index];
-        const std::size_t slot = RowNodeLayout::slot_index(node_id);
-        if (chunk.slot_is_free(slot)) {
-            return;
+    // Writer-only planning pass. It allocates before any mutation, so the
+    // caller can reserve exactly the reclamation it needs and then apply.
+    [[nodiscard]] PrunePlan prepare_prune(
+        CommitId retained_from,
+        std::optional<CommitId> oldest_active = std::nullopt) {
+        PrunePlan plan;
+        const std::size_t rows = row_count();
+
+        std::shared_lock lock{node_mutex_};
+        for (VirtualId id = 0; id < rows; ++id) {
+            RowNodeId head = newest(id);
+            const auto first_at_or_before =
+                [this](RowNodeId start, CommitId cutoff) {
+                    RowNodeId cursor = start;
+                    while (cursor != no_row_node) {
+                        if (node_locked(cursor).commit_id <= cutoff) {
+                            return cursor;
+                        }
+                        cursor = node_locked(cursor).previous;
+                    }
+                    return no_row_node;
+                };
+
+            RowNodeId tail =
+                first_at_or_before(head, retained_from);
+            if (oldest_active &&
+                *oldest_active < retained_from) {
+                const RowNodeId older =
+                    first_at_or_before(head, *oldest_active);
+                tail = older;
+            }
+            if (tail == no_row_node) {
+                continue;
+            }
+            const RowNodeId first_released =
+                node_locked(tail).previous;
+            if (first_released == no_row_node) {
+                continue;
+            }
+
+            plan.links_.push_back(PrunePlan::TailLink{
+                .tail = tail,
+                .first_released = first_released,
+            });
+            for (RowNodeId cursor = first_released;
+                 cursor != no_row_node;) {
+                const RowVersionNode& node = node_locked(cursor);
+                if (node.target != no_target) {
+                    plan.released_targets_.push_back(node.target);
+                }
+                plan.release_nodes_.push_back(cursor);
+                cursor = node.previous;
+            }
         }
-        chunk.return_free_slot(slot);
-        add_available_chunk(chunk_index);
-        --live_nodes_;
+        return plan;
+    }
+
+    void apply_prune(const PrunePlan& plan) noexcept {
+        std::unique_lock lock{node_mutex_};
+        for (const PrunePlan::TailLink& link : plan.links_) {
+            node_locked(link.tail).previous = no_row_node;
+        }
+        for (const RowNodeId node_id : plan.release_nodes_) {
+            release_node_locked(node_id);
+        }
+    }
+
+    // Convenience for tests and callers with no target anchors to release.
+    [[nodiscard]] std::vector<TargetId> prune_rows(
+        CommitId retained_from,
+        std::optional<CommitId> oldest_active = std::nullopt) {
+        auto plan = prepare_prune(retained_from, oldest_active);
+        auto released_targets =
+            std::move(plan.released_targets_);
+        apply_prune(plan);
+        return released_targets;
     }
 
     [[nodiscard]] std::optional<
@@ -157,6 +244,15 @@ public:
     }
 
     [[nodiscard]] std::size_t chunk_count() const noexcept {
+        std::shared_lock lock{node_mutex_};
+        std::size_t count = 0;
+        for (const auto& chunk : chunks_) {
+            count += chunk ? 1 : 0;
+        }
+        return count;
+    }
+
+    [[nodiscard]] std::size_t chunk_directory_slots() const noexcept {
         std::shared_lock lock{node_mutex_};
         return chunks_.size();
     }
@@ -242,6 +338,16 @@ private:
             available_chunks_.pop_back();
         }
 
+        if (!free_chunks_.empty()) {
+            const std::uint64_t chunk_index = free_chunks_.back();
+            auto chunk =
+                std::make_unique<RowNodeChunk>(chunk_index);
+            free_chunks_.pop_back();
+            chunks_[chunk_index] = std::move(chunk);
+            available_chunks_.push_back(chunk_index);
+            return chunk_index;
+        }
+
         const std::uint64_t chunk_index =
             static_cast<std::uint64_t>(chunks_.size());
         if (!RowNodeLayout::can_encode(
@@ -250,6 +356,7 @@ private:
                 "row-node arena exhausted its index space");
         }
 
+        free_chunks_.reserve(chunks_.size() + 1);
         chunks_.push_back(std::make_unique<RowNodeChunk>(chunk_index));
         available_chunks_.push_back(chunk_index);
         return chunk_index;
@@ -277,6 +384,65 @@ private:
         available_chunks_.push_back(chunk_index);
     }
 
+    [[nodiscard]] RowVersionNode& node_locked(
+        RowNodeId node_id) noexcept {
+        const std::uint64_t chunk_index =
+            RowNodeLayout::chunk_index(node_id);
+        assert(chunk_index < chunks_.size());
+        assert(chunks_[chunk_index]);
+        return chunks_[chunk_index]
+            ->nodes[RowNodeLayout::slot_index(node_id)];
+    }
+
+    void release_node_locked(RowNodeId node_id) noexcept {
+        const std::uint64_t chunk_index =
+            RowNodeLayout::chunk_index(node_id);
+        if (chunk_index >= chunks_.size() || !chunks_[chunk_index]) {
+            return;
+        }
+
+        RowNodeChunk& chunk = *chunks_[chunk_index];
+        const std::size_t slot = RowNodeLayout::slot_index(node_id);
+        if (chunk.slot_is_free(slot)) {
+            return;
+        }
+
+        chunk.return_free_slot(slot);
+        --live_nodes_;
+        if (chunk.live_nodes == 0) {
+            release_chunk_locked(chunk_index);
+        } else {
+            add_available_chunk(chunk_index);
+        }
+    }
+
+    void release_chunk_locked(std::uint64_t chunk_index) noexcept {
+        remove_available_chunk(chunk_index);
+        chunks_[chunk_index].reset();
+        assert(free_chunks_.capacity() > free_chunks_.size());
+        free_chunks_.push_back(chunk_index);
+        trim_trailing_chunks_locked();
+    }
+
+    void trim_trailing_chunks_locked() noexcept {
+        while (!chunks_.empty() && !chunks_.back()) {
+            const std::uint64_t chunk_index =
+                static_cast<std::uint64_t>(chunks_.size() - 1);
+            free_chunks_.erase(
+                std::remove(
+                    free_chunks_.begin(),
+                    free_chunks_.end(),
+                    chunk_index),
+                free_chunks_.end());
+            chunks_.pop_back();
+        }
+        if (chunks_.empty()) {
+            std::deque<std::unique_ptr<RowNodeChunk>>{}.swap(chunks_);
+            std::vector<std::uint64_t>{}.swap(available_chunks_);
+            std::vector<std::uint64_t>{}.swap(free_chunks_);
+        }
+    }
+
     mutable std::shared_mutex table_mutex_;
     std::deque<std::unique_ptr<RowPage>> pages_;
     std::size_t row_count_ = 0;
@@ -284,6 +450,7 @@ private:
     mutable std::shared_mutex node_mutex_;
     std::deque<std::unique_ptr<RowNodeChunk>> chunks_;
     std::vector<std::uint64_t> available_chunks_;
+    std::vector<std::uint64_t> free_chunks_;
     std::size_t live_nodes_ = 0;
 };
 

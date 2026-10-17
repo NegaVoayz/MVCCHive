@@ -417,13 +417,8 @@ public:
         if (id > commits_.head_commit()) {
             return std::nullopt;
         }
-        if (id != detail::no_commit) {
-            const std::size_t index =
-                static_cast<std::size_t>(id - 1);
-            if (index >= commits_.commit_count() ||
-                commits_.commit(index).id != id) {
-                return std::nullopt;
-            }
+        if (!commits_.contains_commit(id)) {
+            return std::nullopt;
         }
         return make_snapshot(id);
     }
@@ -460,20 +455,13 @@ public:
 
     [[nodiscard]] std::vector<Diff> diffs(CommitId id) const {
         std::shared_lock lock{history_mutex_};
-        if (id == detail::no_commit ||
-            id > commits_.head_commit()) {
+        const auto index = commits_.commit_index(id);
+        if (!index) {
             return {};
         }
 
-        const std::size_t index =
-            static_cast<std::size_t>(id - 1);
-        if (index >= commits_.commit_count()) {
-            return {};
-        }
-        const detail::CommitRecord& record = commits_.commit(index);
-        if (record.id != id) {
-            return {};
-        }
+        const detail::CommitRecord& record =
+            commits_.commit(*index);
 
         std::vector<Diff> result;
         result.reserve(record.diff_count);
@@ -486,6 +474,86 @@ public:
         return result;
     }
 
+    void prune_before(CommitId first_retained) {
+        std::unique_lock writer_lock{writer_mutex_};
+        std::unique_lock history_lock{history_mutex_};
+
+        const CommitId head = commits_.head_commit();
+        if (head == detail::no_commit) {
+            return;
+        }
+        if (first_retained > head) {
+            throw std::out_of_range(
+                "first retained commit is beyond the head");
+        }
+
+        const CommitId first =
+            std::max(first_retained, commits_.first_commit_id());
+        auto commit_plan = commits_.prepare_prune(first);
+
+        std::optional<CommitId> oldest_snapshot;
+        CommitId snapshot_id = detail::no_commit;
+        if (snapshots_->oldest(snapshot_id)) {
+            oldest_snapshot = snapshot_id;
+        }
+
+        current_targets_.ensure_size(rows_->row_count());
+        auto row_plan =
+            rows_->prepare_prune(first, oldest_snapshot);
+        owner_store_reserve(row_plan.released_targets().size());
+
+        commits_.apply_prune(std::move(commit_plan));
+        rows_->apply_prune(row_plan);
+        release_targets(row_plan.released_targets());
+        current_targets_.rebuild(*rows_, head);
+    }
+
+    void clear_history() {
+        std::unique_lock writer_lock{writer_mutex_};
+        std::unique_lock history_lock{history_mutex_};
+
+        const CommitId head = commits_.head_commit();
+        if (head == detail::no_commit) {
+            return;
+        }
+
+        auto commit_plan = commits_.prepare_clear_history();
+
+        std::optional<CommitId> oldest_snapshot;
+        CommitId snapshot_id = detail::no_commit;
+        if (snapshots_->oldest(snapshot_id)) {
+            oldest_snapshot = snapshot_id;
+        }
+
+        current_targets_.ensure_size(rows_->row_count());
+        auto row_plan =
+            rows_->prepare_prune(head, oldest_snapshot);
+        owner_store_reserve(row_plan.released_targets().size());
+
+        commits_.apply_prune(std::move(commit_plan));
+        rows_->apply_prune(row_plan);
+        release_targets(row_plan.released_targets());
+        current_targets_.rebuild(*rows_, head);
+    }
+
+    void clear() {
+        std::unique_lock writer_lock{writer_mutex_};
+        std::unique_lock history_lock{history_mutex_};
+
+        auto fresh_store =
+            std::make_unique<detail::VersionStore<T>>();
+        auto fresh_rows = std::make_unique<detail::RowIndex>();
+        auto fresh_snapshots =
+            std::make_shared<detail::SnapshotRegistry>();
+
+        commits_.clear();
+        snapshots_ = std::move(fresh_snapshots);
+        rows_ = std::move(fresh_rows);
+        store_ = std::move(fresh_store);
+        current_targets_.clear();
+        next_virtual_id_ = 0;
+    }
+
 private:
     [[nodiscard]] Snapshot make_snapshot(CommitId id) const {
         auto guard = std::make_shared<detail::SnapshotGuard>(
@@ -493,6 +561,17 @@ private:
         snapshots_->add(id);
         guard->mark_registered();
         return Snapshot{id, *rows_, *store_, std::move(guard)};
+    }
+
+    void owner_store_reserve(std::size_t additional) {
+        store_->reserve_reclamation(additional);
+    }
+
+    void release_targets(const std::vector<TargetId>& targets) noexcept {
+        for (const TargetId target : targets) {
+            store_->release_view(target);
+        }
+        store_->drain_retirements();
     }
 
     std::unique_ptr<detail::VersionStore<T>> store_;

@@ -33,6 +33,10 @@ public:
         return values_.size();
     }
 
+    void clear() noexcept {
+        std::vector<TargetId>{}.swap(values_);
+    }
+
     // Writer-only repair path. The authoritative row heads supply every
     // entry, including rows whose cache entry was damaged.
     void rebuild(

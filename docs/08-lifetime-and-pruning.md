@@ -102,6 +102,14 @@ under writer exclusion before retiring the older nodes, or retain those
 metadata nodes until the row index is destroyed; either way the link is not
 part of the visible read path.
 
+Implementation note: snapshot traversal still reads the `previous` link of
+nodes whose commit is newer than the snapshot. If an active snapshot is older
+than every node in a row chain, it can walk the whole chain even though it
+resolves no value. The first implementation therefore treats such a chain as
+pinned instead of truncating its tail. When the horizon does find a retained
+node at or below the snapshot commit, that node's `previous` link is outside
+the visible traversal path and can be cleared before older nodes are released.
+
 Snapshots created before pruning remain valid as long as the snapshot guard
 and the hive are alive, because the row nodes they can traverse are retained.
 Looking up a pruned commit by ID through `hive.snapshot(old_id)` is no longer

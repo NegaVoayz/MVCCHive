@@ -113,6 +113,9 @@ private:
             }
             pages_.pop_back();
         }
+        if (pages_.empty()) {
+            std::deque<std::unique_ptr<Page>>{}.swap(pages_);
+        }
     }
 
     mutable std::shared_mutex mutex_;

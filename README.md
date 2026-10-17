@@ -2,9 +2,9 @@
 
 C++23 MVCC hive design and implementation workspace.
 
-Status: implementation started; M1 layout, M2 version storage, M3 row
-history, and M4 public transactions/snapshots are in place. Pruning and
-reclamation work remains.
+Status: implementation started; M1 through M5 are in place, including
+snapshot-safe history pruning, target/block reclamation, and deterministic
+clear operations.
 
 - [Design documentation](docs/README.md)
 - [Implementation plan](docs/13-implementation-plan.md)

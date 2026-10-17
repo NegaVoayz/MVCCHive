@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: M0 through M4 are implemented. Pruning, reclamation, and concurrency
+Status: M0 through M5 are implemented. Concurrency stress testing and model
 validation remain.
 
 The first goal is a small, testable vertical slice that proves the layout,
@@ -119,6 +119,20 @@ Acceptance: transaction reads see their own staged changes; old snapshots see
 old targets; references remain valid until the transaction ends.
 
 ### M5: Pruning and deterministic lifetime
+
+Status: implemented in `prune_before`, `clear_history`, `clear`,
+`detail/row_index.hpp`, `detail/current_targets.hpp`, and `tests/prune_test.cpp`.
+
+The pruning pass prepares compact commit metadata and a row-prune plan before
+changing history. After those allocations succeed, it reserves the exact
+retirement capacity, truncates retained chains, releases target anchors,
+drains retirement, and shrinks empty block/chunk directories without moving a
+live payload.
+
+An old snapshot pins every row node whose `previous` link it may traverse, not
+only targets it can visibly resolve. This conservative rule avoids mutating a
+link concurrently with snapshot traversal without turning `previous` into an
+atomic field.
 
 - Implement `prune_before` and `clear_history`.
 - Implement row-node horizon protection and empty-chunk release.

@@ -97,6 +97,8 @@ public:
         std::lock_guard lock{retirement_mutex_};
         retired_targets_.reserve(
             retired_targets_.size() + additional);
+        retirement_buffer_.reserve(
+            retirement_buffer_.size() + additional);
         available_blocks_.reserve(
             available_blocks_.size() + additional);
         free_blocks_.reserve(free_blocks_.size() + additional);
@@ -125,15 +127,16 @@ public:
     // Writer-only. Retires targets whose final view was released and releases
     // every block that no longer contains a constructed payload.
     void drain_retirements() noexcept {
-        std::vector<TargetId> retired;
         {
             std::lock_guard lock{retirement_mutex_};
-            retired.swap(retired_targets_);
+            retirement_buffer_.clear();
+            retired_targets_.swap(retirement_buffer_);
         }
 
-        for (const TargetId target : retired) {
+        for (const TargetId target : retirement_buffer_) {
             retire_target(target);
         }
+        retirement_buffer_.clear();
         release_empty_blocks();
     }
 
@@ -148,8 +151,6 @@ public:
             }
         }
         trim_owned_tail();
-        directory_.clear(
-            static_cast<std::uint64_t>(owned_blocks_.size()));
     }
 
     [[nodiscard]] std::size_t allocated_block_count() const noexcept {
@@ -172,6 +173,10 @@ public:
 
     [[nodiscard]] std::size_t directory_page_count() const noexcept {
         return directory_.page_count();
+    }
+
+    [[nodiscard]] std::size_t owned_block_slots() const noexcept {
+        return owned_blocks_.size();
     }
 
 private:
@@ -288,6 +293,12 @@ private:
                 free_blocks_.end());
             owned_blocks_.pop_back();
         }
+        if (owned_blocks_.empty()) {
+            std::deque<std::unique_ptr<VersionBlock<T>>>{}.swap(
+                owned_blocks_);
+            std::vector<std::uint64_t>{}.swap(available_blocks_);
+            std::vector<std::uint64_t>{}.swap(free_blocks_);
+        }
     }
 
     void destroy_all_payloads() noexcept {
@@ -311,6 +322,7 @@ private:
 
         std::lock_guard lock{retirement_mutex_};
         retired_targets_.clear();
+        retirement_buffer_.clear();
     }
 
     BlockDirectory<T> directory_;
@@ -323,6 +335,7 @@ private:
     // The only reader-to-writer handoff.
     mutable std::mutex retirement_mutex_;
     std::vector<TargetId> retired_targets_;
+    std::vector<TargetId> retirement_buffer_;
 };
 
 }  // namespace mvcc_hive::detail

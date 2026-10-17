@@ -17,7 +17,9 @@ using mvcc_hive::detail::CommitId;
 using mvcc_hive::detail::CommitStore;
 using mvcc_hive::detail::CurrentTargetCache;
 using mvcc_hive::detail::RowIndex;
+using mvcc_hive::detail::RowNodeLayout;
 using mvcc_hive::detail::RowNodeId;
+using mvcc_hive::detail::RowVersionNode;
 using mvcc_hive::detail::TargetId;
 using mvcc_hive::detail::VersionStore;
 using mvcc_hive::detail::VersionTokenAccess;
@@ -205,6 +207,82 @@ void check_current_cache_rebuild() {
     REQUIRE(fixture.current.get(0) == second);
 }
 
+void check_row_pruning_keeps_snapshot_tail() {
+    RowIndex rows;
+    rows.ensure_rows(1);
+
+    const RowNodeId first = rows.allocate_node(
+        {.commit_id = 1, .target = 10, .previous = no_row_node});
+    const RowNodeId second = rows.allocate_node(
+        {.commit_id = 2, .target = 20, .previous = first});
+    const RowNodeId third = rows.allocate_node(
+        {.commit_id = 3, .target = 30, .previous = second});
+    const RowNodeId fourth = rows.allocate_node(
+        {.commit_id = 4, .target = 40, .previous = third});
+    rows.set_newest(0, fourth);
+
+    auto released = rows.prune_rows(2);
+    REQUIRE(released.size() == 1);
+    REQUIRE(released[0] == 10);
+    REQUIRE(rows.live_node_count() == 3);
+    REQUIRE(rows.visible_target(0, 1) == no_target);
+    REQUIRE(rows.visible_target(0, 2) == 20);
+    REQUIRE(rows.visible_target(0, 4) == 40);
+
+    released = rows.prune_rows(4);
+    REQUIRE(released.size() == 2);
+    REQUIRE(rows.live_node_count() == 1);
+    REQUIRE(rows.newest(0) == fourth);
+    REQUIRE(rows.visible_target(0, 2) == no_target);
+    REQUIRE(rows.visible_target(0, 4) == 40);
+
+    RowIndex pinned;
+    pinned.ensure_rows(1);
+    const RowNodeId pinned_first = pinned.allocate_node(
+        {.commit_id = 1, .target = 50, .previous = no_row_node});
+    const RowNodeId pinned_second = pinned.allocate_node(
+        {.commit_id = 2, .target = 60, .previous = pinned_first});
+    pinned.set_newest(0, pinned_second);
+    const auto pinned_release = pinned.prune_rows(2, 0);
+    REQUIRE(pinned_release.empty());
+    REQUIRE(pinned.live_node_count() == 2);
+}
+
+void check_row_chunk_directory_auto_shrinks() {
+    RowIndex rows;
+    rows.ensure_rows(1);
+
+    std::vector<RowNodeId> nodes;
+    nodes.reserve(600);
+    for (std::size_t i = 0; i < 600; ++i) {
+        nodes.push_back(rows.allocate_node(
+            RowVersionNode{
+                .commit_id = 1,
+                .target = static_cast<TargetId>(i + 1),
+                .previous = no_row_node,
+            }));
+    }
+
+    REQUIRE(rows.live_node_count() == 600);
+    REQUIRE(rows.chunk_count() == 3);
+    REQUIRE(rows.chunk_directory_slots() == 3);
+
+    for (const RowNodeId node : nodes) {
+        rows.release_node(node);
+    }
+
+    REQUIRE(rows.live_node_count() == 0);
+    REQUIRE(rows.chunk_count() == 0);
+    REQUIRE(rows.chunk_directory_slots() == 0);
+
+    const RowNodeId reused = rows.allocate_node(
+        {.commit_id = 2, .target = 1, .previous = no_row_node});
+    REQUIRE(RowNodeLayout::chunk_index(reused) == 0);
+    REQUIRE(RowNodeLayout::slot_index(reused) == 1);
+    rows.release_node(reused);
+    REQUIRE(rows.chunk_directory_slots() == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -213,4 +291,6 @@ int main() {
     check_tombstone_visibility();
     check_prepare_failure_rolls_back_nodes();
     check_current_cache_rebuild();
+    check_row_pruning_keeps_snapshot_tail();
+    check_row_chunk_directory_auto_shrinks();
 }

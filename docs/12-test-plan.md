@@ -46,9 +46,9 @@
 - Ownership tests prove that releasing a block resets exactly one owning
   `unique_ptr` and that the reader-directory entry is cleared before readers
   can observe the empty slot.
-- Lifetime-ownership assertions verify that `MVCCHive` owns `VersionStore` and
-  `RowIndex` through `unique_ptr`, while `Snapshot` and `Transaction` hold
-  non-owning references and never a `shared_ptr<VersionStore>`.
+- Lifetime-ownership assertions verify that `MVCCHive` and snapshot guards
+  share the generation containing `VersionStore` and `RowIndex`, while a
+  `Transaction` remains a writer-locked child handle.
 - Layout assertions verify that `VersionToken` is 8 bytes, `Diff` is 32 bytes
   and trivially copyable, and instrumentation verifies two adjacent diffs
   occupy one 64-byte-aligned diff-log line.
@@ -121,13 +121,15 @@
 - An empty block in the middle of the directory is released and its index is
   safely reused without invalidating any live target.
 - A retained snapshot prevents its blocks from being auto-shrunk.
-- A lifetime test instruments `VersionStore` and `T` destructors, destroys the
-  hive while a `Snapshot` object still exists, and verifies that the store and
-  all remaining payloads are destroyed immediately. The later snapshot-guard
-  destruction must be a safe no-op, and `Snapshot::valid()` must return false.
-- A `clear()` test verifies that the old `VersionStore` is destroyed, a fresh
-  empty state is installed, outstanding snapshot guards become inert, and
-  `Snapshot::valid()` returns false for the old snapshots.
+- A lifetime test instruments `T` destructors, destroys the hive while a
+  `Snapshot` object still exists, and verifies that the retired generation is
+  destroyed when the last snapshot handle is released. `Snapshot::valid()`
+  must return false immediately after hive destruction.
+- A `clear()` test verifies that a fresh empty generation is installed,
+  outstanding snapshot handles become invalid, and the retired generation is
+  destroyed only after those handles are released.
+- A concurrent-reader test races snapshot lookups with `clear()` and verifies
+  that old payload storage remains alive until the snapshot handle is released.
 - A teardown test with an active transaction verifies that `~MVCCHive` waits
   for the writer lock and does not destroy the store underneath a live
   transaction.

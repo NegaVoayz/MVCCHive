@@ -44,14 +44,16 @@ hive. History is represented by per-row version chains plus a compact diff log.
   private `RowNodeId`; zero is the empty/tail sentinel.
 - `row_head[vid].newest` is authoritative. `current_targets` is a writer-only,
   rebuildable cache.
-- A snapshot stores a commit ID, non-owning references to `RowIndex` and
-  `VersionStore`, and a snapshot guard. It does not materialize a projection.
+- A snapshot stores a commit ID and a guard that shares ownership of the
+  generation containing `RowIndex` and `VersionStore`. It does not materialize
+  a projection.
 - A transaction resolves an ID through its private overlay first and its fixed
   parent snapshot second.
 - Commit installation has a throwing prepare phase and a `noexcept` publish
   phase. Publication does not allocate or construct.
-- `MVCCHive` is the sole owner of `VersionStore` and `RowIndex`; destroying the
-  hive destroys the store and invalidates outstanding snapshots.
+- `MVCCHive` and snapshot guards share ownership of the current generation.
+  `clear()` and hive destruction invalidate outstanding snapshots immediately;
+  the retired generation is destroyed when its last guard is released.
 - `VersionToken::none()` is the target-domain `npos`, exactly `no_target`. The
   block allocator reserves the top block index so no live target can collide
   with it.

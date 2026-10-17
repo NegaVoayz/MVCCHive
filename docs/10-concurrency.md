@@ -30,21 +30,24 @@ are enabled.
 
 ### 14.2 Snapshot reads
 
-- A `Snapshot` holds a commit ID, non-owning references to the row index and
-  version store, and an active-snapshot guard.
-- A snapshot is valid only while its hive is alive. It does not extend the
-  lifetime of `VersionStore` or `RowIndex`; destroying the hive invalidates it.
-- `Snapshot::valid()` checks the guard's weak registry reference and is false
+- A `Snapshot` holds a commit ID and an active-snapshot guard. The guard shares
+  ownership of the immutable generation containing the row index and version
+  store.
+- A snapshot is valid only while its hive generation is current.
+  `Snapshot::valid()` checks the guard's weak registry reference and is false
   after hive destruction or `clear()`.
+- Invalidating a handle does not destroy a generation that an in-flight reader
+  may still be using. The generation remains alive until its last snapshot
+  guard is released.
 - `Snapshot::at` and `Snapshot::find` are `const` operations with no store
   lock, no writer-lock acquisition, and no atomic increment in the common
   payload lookup path.
-- Different threads may read the same live `Snapshot` concurrently. As with
-  any C++ object, destroying a snapshot or its hive while another thread is
-  using or destroying either requires ordinary object-lifetime synchronization
-  from the caller.
-- A snapshot copied to another thread shares the same guard and the same
-  non-owning row-index reference. Copying the snapshot does not ask the
+- Different threads may read the same live `Snapshot` concurrently. `clear()`
+  and hive destruction may run concurrently with snapshot reads: the guard
+  keeps the read generation alive, while the registry makes future handle
+  checks report invalid.
+- A snapshot copied to another thread shares the same guard, generation
+  ownership, and row-index reference. Copying the snapshot does not ask the
   payload store for a new view.
 
 Row heads and the head commit are published with release/acquire semantics.
@@ -121,14 +124,14 @@ IDs or slot locations, never payloads. It may be protected by a small mutex or
 implemented as a bounded MPSC queue. A history-drop operation drains it before
 performing the block and directory shrink pass.
 
-`MVCCHive` is the sole owner of `VersionStore`. Its destructor resets the row
-index and snapshot registry, drains any remaining retirement entries, destroys
+The hive and its snapshot guards share ownership of each `HiveState`
+generation. `~MVCCHive` detaches the snapshot registry, making outstanding
+handles invalid, then drops the hive's generation reference. If a guard still
+exists, that generation remains alive and is destroyed when the final guard is
+released. The store destructor drains remaining retirement state, destroys
 every remaining constructed `T` exactly once, and releases all version blocks.
-Snapshot guards hold only weak references to the registry, so a guard that
-outlives the hive becomes inert. An outstanding `Snapshot` object is invalid
-after hive destruction and must not be used. Because teardown is exclusive,
-`VersionStore` destruction does not wait for target view counts to reach zero;
-it destroys every constructed slot and then releases every block.
+Because teardown is exclusive within a generation, it does not wait for target
+view counts to reach zero.
 
 ### 14.5 Publication order
 

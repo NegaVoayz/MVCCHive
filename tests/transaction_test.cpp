@@ -232,9 +232,13 @@ void check_snapshot_lifetime_and_copy() {
         REQUIRE(copy.at(id).number == 9);
     }
 
-    REQUIRE(Value::alive == 0);
+    // The snapshot owns its generation, so hive destruction invalidates the
+    // handle without destroying storage that the handle may still protect.
+    REQUIRE(Value::alive == 1);
     REQUIRE(!snapshot->valid());
     REQUIRE(!snapshot->find(0).has_value());
+    snapshot.reset();
+    REQUIRE(Value::alive == 0);
 }
 
 void check_writable_transaction_requires_head() {

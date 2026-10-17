@@ -55,7 +55,7 @@ public:
 
     void prune_before(CommitId first_retained);
     void clear_history();
-    void clear();  // destructive: invalidates snapshots and destroys the store
+    void clear();  // destructive reset; retires the current generation
 
 private:
     using TargetId = std::uint64_t;  // private block/slot location
@@ -81,16 +81,19 @@ private:
     template<class U>
     class StableDirectory;
     class SnapshotRegistry;
+    template<class U>
     class SnapshotGuard;
+    template<class U>
+    struct HiveState;
     struct Commit;
     class CommitStore;
     class RetirementQueue;
     class RowLockManager;
     class RowLockSet;
 
-    std::unique_ptr<VersionStore> store_;
-    std::unique_ptr<RowIndex> row_index_;
-    // Guards hold weak references; this is the sole strong owner.
+    // The hive and snapshot guards share the current generation.
+    std::shared_ptr<HiveState<T>> state_;
+    // Guards hold weak references; this is the sole strong registry owner.
     std::shared_ptr<SnapshotRegistry> snapshots_;
     std::vector<TargetId> current_targets_;  // derived writer-only cache
     std::atomic<CommitId> head_commit_;
@@ -112,11 +115,13 @@ live version. Projection is exactly
 `bits = (target == no_target) ? none_bits : target`; no other transformation
 or normalization is applied.
 
-Because `store_` and `row_index_` are `unique_ptr`s to private incomplete
-types, `~MVCCHive()` is defined out of line after `VersionStore` and
-`RowIndex` are complete. Its explicit destruction order is: detach/invalidate
-snapshot guards, release the row index, then destroy the version store. The
-member declaration order is chosen so `store_` is the last member destroyed.
+`state_` owns one generation's `VersionStore` and `RowIndex`. Snapshot guards
+hold another strong reference to that same generation. `~MVCCHive()` first
+detaches the snapshot registry so existing handles become invalid, then drops
+the hive's generation reference. If any snapshot handle still exists, the
+generation and every payload it owns stay alive until the final guard is
+released. An in-flight snapshot read therefore cannot observe destroyed
+storage during hive teardown or `clear()`.
 
 Token equality means equal physical target location in the retained trace. It
 does not imply equal version identity across different commit IDs, because a
@@ -304,9 +309,7 @@ private:
     friend class Transaction;
 
     CommitId commit_id_;
-    std::reference_wrapper<const RowIndex> rows_;
-    std::reference_wrapper<const VersionStore> store_;
-    std::shared_ptr<SnapshotGuard> guard_;
+    std::shared_ptr<SnapshotGuard<T>> guard_;
 
     TargetId visible_target(VirtualId id) const noexcept;  // no_target if absent
 };
@@ -314,12 +317,12 @@ private:
 
 A snapshot is immutable and can be read after later commits are published
 while its hive is alive. Its active-snapshot guard prevents row-version nodes
-visible to its commit from being pruned. It holds only non-owning references
-to the row index and version store; it does not own them and does not extend
-their lifetime. Destroying the hive destroys the `VersionStore` immediately,
-so an outstanding `Snapshot` is invalid after that point and must not be
-used. `clear()` has the same lifetime effect: it invalidates outstanding
-snapshots and installs a fresh empty state.
+visible to its commit from being pruned. Through that guard it owns the
+generation containing the row index and version store. `clear()` and hive
+destruction invalidate outstanding snapshots immediately by replacing or
+detaching the registry, but a retired generation remains alive until its last
+guard is destroyed. A successful read may therefore finish against the
+generation it started on without a use-after-free.
 
 `Snapshot::valid()` checks the guard's weak registry reference and does not
 touch the payload store. It becomes false after hive destruction or `clear()`.
@@ -328,8 +331,8 @@ but the hot read path does not acquire a lifetime check on every lookup.
 
 | Owner | Strongly owns | Lifetime |
 | --- | --- | --- |
-| `MVCCHive` | `VersionStore`, `RowIndex`, `SnapshotRegistry` | the hive |
-| `Snapshot` | shared `SnapshotGuard` | its copies, but valid only while the hive is alive |
+| `MVCCHive` | current `HiveState` generation, `SnapshotRegistry` | the hive |
+| `Snapshot` | shared `SnapshotGuard`, which owns its generation | its copies; invalid after `clear()` or hive destruction |
 | `Transaction` | writer-lock handle, overlay, staged anchors | the transaction; must end before the hive |
 
 The row-index reference, store reference, target decoding, snapshot guard, and

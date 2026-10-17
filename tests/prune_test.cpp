@@ -1,9 +1,11 @@
 #include <mvcc_hive/mvcc_hive.hpp>
 
+#include <atomic>
 #include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 
 namespace {
 
@@ -98,13 +100,19 @@ void check_prune_and_history_clear() {
     REQUIRE(hive.head().at(id).number == 5);
     REQUIRE(hive.diffs(5).size() == 1);
 
-    auto before_clear = hive.head();
+    std::optional<MVCCHive<Value>::Snapshot> before_clear{
+        hive.head()};
     hive.clear();
-    REQUIRE(!before_clear.valid());
-    REQUIRE(Value::alive == 0);
+    REQUIRE(!before_clear->valid());
+    // clear() invalidates the old handle immediately, but the old generation
+    // remains alive until that handle is destroyed.
+    REQUIRE(Value::alive == 2);
     REQUIRE(hive.head().commit_id() == 0);
     REQUIRE(!hive.snapshot(4).has_value());
     REQUIRE(hive.diffs(4).empty());
+
+    before_clear.reset();
+    REQUIRE(Value::alive == 0);
 }
 
 void check_clear_history_keeps_active_snapshot() {
@@ -172,6 +180,74 @@ void check_prune_range_validation() {
     REQUIRE(Value::alive == 1);
 }
 
+void check_clear_is_safe_with_concurrent_reader() {
+    Value::alive = 0;
+    MVCCHive<Value> hive;
+
+    const auto id = insert(hive, 41);
+    auto snapshot = hive.snapshot(1);
+    REQUIRE(snapshot.has_value());
+    const Value& retained = snapshot->at(id);
+
+    std::atomic<bool> go{false};
+    std::atomic<bool> stop{false};
+    std::atomic<int> failures{0};
+
+    std::thread reader([&] {
+        while (!go.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        while (!stop.load(std::memory_order_relaxed)) {
+            try {
+                if (snapshot->valid()) {
+                    const auto value = snapshot->find(id);
+                    if (value && value->get().number != 41) {
+                        failures.fetch_add(
+                            1, std::memory_order_relaxed);
+                    }
+                    static_cast<void>(snapshot->at(id));
+                } else if (snapshot->find(id)) {
+                    failures.fetch_add(
+                        1, std::memory_order_relaxed);
+                }
+            } catch (const std::logic_error&) {
+                // clear() may invalidate the handle between valid() and read.
+            } catch (...) {
+                failures.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    });
+
+    go.store(true, std::memory_order_release);
+    hive.clear();
+    REQUIRE(!snapshot->valid());
+    REQUIRE(retained.number == 41);
+    REQUIRE(!snapshot->find(id).has_value());
+    bool invalid_read_threw = false;
+    try {
+        static_cast<void>(snapshot->at(id));
+    } catch (const std::logic_error&) {
+        invalid_read_threw = true;
+    }
+    REQUIRE(invalid_read_threw);
+    stop.store(true, std::memory_order_relaxed);
+    reader.join();
+
+    REQUIRE(failures.load(std::memory_order_relaxed) == 0);
+    REQUIRE(Value::alive == 1);
+
+    auto tx = hive.begin_transaction();
+    const auto recycled = tx.emplace(7);
+    REQUIRE(recycled == 0);
+    auto committed = tx.commit();
+    REQUIRE(committed.valid());
+    REQUIRE(committed.at(recycled).number == 7);
+    REQUIRE(Value::alive == 2);
+
+    snapshot.reset();
+    REQUIRE(Value::alive == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -179,4 +255,5 @@ int main() {
     check_clear_history_keeps_active_snapshot();
     check_zero_snapshot_does_not_drop_retained_history();
     check_prune_range_validation();
+    check_clear_is_safe_with_concurrent_reader();
 }

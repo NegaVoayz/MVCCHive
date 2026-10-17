@@ -97,21 +97,23 @@ The implementation should assert or enforce all of the following:
     `VersionToken` is none, and no live target can equal it. The block
     allocator enforces `block_id <= max_block_index`, reserving the top block
     index so the sentinel is structurally unreachable.
-47. `MVCCHive` is the sole owner of `VersionStore` and `RowIndex`; `Snapshot`
-    and `Transaction` hold only non-owning references.
-48. `~MVCCHive` destroys `VersionStore` deterministically, even if outstanding
-    `Snapshot` objects still exist. An active `Transaction` must finish or be
-    destroyed first because the destructor takes the writer lock. Every
-    remaining constructed `T` is destroyed exactly once, and every block is
+47. `MVCCHive` and its snapshot guards share ownership of immutable
+    `HiveState` generations containing `VersionStore` and `RowIndex`.
+    `Transaction` remains a writer-locked child handle.
+48. `~MVCCHive` invalidates outstanding `Snapshot` objects deterministically.
+    A generation's store and remaining payloads are destroyed when the last
+    guard for that generation is released. An active `Transaction` must finish
+    or be destroyed first because the destructor takes the writer lock.
+49. A `SnapshotGuard` holds a weak reference to the snapshot registry and a
+    strong reference to its generation. If the registry has already been
+    destroyed, unregistering is a no-op while generation ownership remains
+    intact.
+50. A `Snapshot` remains memory-safe after its hive is destroyed or after
+    `clear()`: `valid()` reports false, `find` returns `nullopt`, and `at`
+    throws. Its guard keeps the retired generation alive until the handle is
     released.
-49. A `SnapshotGuard` holds only a weak reference to the snapshot registry; if
-    the registry has already been destroyed, guard destruction is a no-op.
-50. Using a `Snapshot` or `Transaction` after its hive is destroyed or after
-    `clear()` is invalid; `Snapshot::valid()` reports false in both cases, and
-    neither handle extends the store's lifetime.
-51. `clear()` destroys the current `VersionStore` and `RowIndex`, replaces the
-    snapshot registry to invalidate outstanding snapshots, and installs a
-    fresh empty state.
+51. `clear()` retires the current generation, replaces the snapshot registry
+    to invalidate outstanding snapshots, and installs a fresh empty state.
 52. `Transaction::at` and `find` consult the transaction overlay first and the
     fixed parent snapshot second. They never scan the diff log or
     `current_targets`.

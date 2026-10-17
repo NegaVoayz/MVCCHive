@@ -279,9 +279,12 @@ operations or rebuild an index.
 
 ### 7.3 Snapshot resolution
 
-A `Snapshot` stores a `CommitId`, non-owning references to `RowIndex` and
-`VersionStore`, and an active-snapshot guard. It does not store a full
-projection table and does not extend the store's lifetime.
+A `Snapshot` stores a `CommitId` and an active-snapshot guard. The guard shares
+ownership of the immutable generation containing `RowIndex` and
+`VersionStore`. It does not store a full projection table. The guard keeps the
+generation alive through an in-flight read or while an outstanding handle still
+exists, but `Snapshot::valid()` becomes false immediately after `clear()` or
+hive destruction.
 
 Resolving a virtual ID at commit `C` is:
 

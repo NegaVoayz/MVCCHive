@@ -11,8 +11,10 @@ Each live target's anchor count is the corresponding entry in the block's
 - an uncommitted transaction that constructed it;
 - any other temporary owner that may expose it to a reader.
 
-These rules govern reclamation while the hive is alive. They do not create
-shared ownership of `VersionStore`; only `MVCCHive` owns the store.
+These rules govern reclamation while a generation is current. The hive and its
+snapshot guards share ownership of the generation object that contains the
+`VersionStore` and `RowIndex`; a retired generation is destroyed only after its
+last snapshot handle is released.
 
 A row-version node created by a commit owns one target view until that node is
 pruned. The newest node for each virtual ID therefore keeps the current target
@@ -120,10 +122,12 @@ baseline, plus any older node still required by an active snapshot horizon,
 drops unreachable row nodes, commit records, and diffs, and keeps the current
 `VersionStore` alive. `clear()` is a destructive exclusive reset: it
 invalidates all outstanding snapshots by replacing the snapshot registry,
-destroys the current `VersionStore` and `RowIndex` (including every remaining
-payload), clears the writer-only `current_targets` cache, and installs a fresh
-empty state. The caller must ensure no snapshot is being read concurrently
-with `clear()` and that no snapshot guard is being destroyed concurrently.
+retires the current `VersionStore` and `RowIndex` generation, clears the
+writer-only `current_targets` cache, and installs a fresh empty generation.
+Removing the hive's generation reference is safe while snapshot readers are
+active because each guard owns the generation it reads. The retired
+generation, including every remaining payload, is destroyed when its last
+snapshot handle is released. No caller-side quiescence is required.
 
 `prune_before` and `clear_history` end with the same explicit reclamation
 pass. A block still referenced by a retained row node or a live snapshot is
@@ -132,4 +136,6 @@ observable rather than dependent on a library container's unspecified capacity
 policy.
 
 The split is deliberate: `clear_history()` prunes metadata while retaining the
-store, whereas `clear()` is the destructive reset that destroys the store.
+store, whereas `clear()` retires the whole generation. Its storage is destroyed
+immediately when no snapshot guard owns it, or when the last outstanding guard
+is released.

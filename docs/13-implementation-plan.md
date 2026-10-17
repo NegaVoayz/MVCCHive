@@ -121,7 +121,8 @@ old targets; references remain valid until the transaction ends.
 ### M5: Pruning and deterministic lifetime
 
 Status: implemented in `prune_before`, `clear_history`, `clear`,
-`detail/row_index.hpp`, `detail/current_targets.hpp`, and `tests/prune_test.cpp`.
+`detail/row_index.hpp`, `detail/current_targets.hpp`,
+`detail/snapshot_state.hpp`, and `tests/prune_test.cpp`.
 
 The pruning pass prepares compact commit metadata and a row-prune plan before
 changing history. After those allocations succeed, it reserves the exact
@@ -136,12 +137,13 @@ atomic field.
 
 - Implement `prune_before` and `clear_history`.
 - Implement row-node horizon protection and empty-chunk release.
-- Implement destructive `clear()` and hive teardown ordering.
+- Implement destructive `clear()` and hive teardown ordering with shared
+  generation lifetime for snapshot readers.
 - Add `Snapshot::valid()`.
 
-Acceptance: snapshots remain valid across normal pruning, become invalid at
-`clear()`/hive destruction, and the `VersionStore` destructor runs at hive
-destruction even with outstanding snapshot objects.
+Acceptance: snapshots remain valid across normal pruning, become invalid
+immediately at `clear()`/hive destruction, and their retired generation is
+destroyed safely when the last snapshot guard is released.
 
 ### M6: Concurrency and model testing
 

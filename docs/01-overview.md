@@ -69,9 +69,10 @@ payload mutations that happen to be reversible.
 - Supported concurrency is one writer with concurrent immutable snapshot
   readers.
 
-- `MVCCHive` is the sole owner of `VersionStore` and `RowIndex`. A `Snapshot`
-  is a non-owning child handle; destroying the hive destroys the store and
-  invalidates outstanding snapshots.
+- `MVCCHive` and its `Snapshot` handles share ownership of one immutable
+  generation containing the `VersionStore` and `RowIndex`. `clear()` and hive
+  destruction invalidate outstanding handles immediately, while the retired
+  generation remains alive until its last snapshot guard is released.
 
 Stored values may own move-only resources, but even those resources are never
 extracted from one version and moved into another. Users construct each new

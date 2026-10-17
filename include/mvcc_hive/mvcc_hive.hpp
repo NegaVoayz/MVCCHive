@@ -4,7 +4,7 @@
 #include <mvcc_hive/detail/commit_store.hpp>
 #include <mvcc_hive/detail/current_targets.hpp>
 #include <mvcc_hive/detail/row_index.hpp>
-#include <mvcc_hive/detail/snapshot_registry.hpp>
+#include <mvcc_hive/detail/snapshot_state.hpp>
 #include <mvcc_hive/detail/transaction_overlay.hpp>
 #include <mvcc_hive/detail/version_store.hpp>
 #include <mvcc_hive/version_token.hpp>
@@ -61,11 +61,12 @@ public:
             if (!valid()) {
                 throw std::logic_error("snapshot is no longer valid");
             }
+            const auto& state = guard_->state();
             const detail::TargetId target = visible_target(id);
             if (target == detail::no_target) {
                 throw std::out_of_range("virtual ID is not visible");
             }
-            auto value = store_.get().resolve(target);
+            auto value = state.store.resolve(target);
             if (!value) {
                 throw std::out_of_range("visible target is unavailable");
             }
@@ -82,7 +83,7 @@ public:
             if (target == detail::no_target) {
                 return std::nullopt;
             }
-            return store_.get().resolve(target);
+            return guard_->state().store.resolve(target);
         }
 
         template<class F>
@@ -91,13 +92,14 @@ public:
                 return;
             }
 
-            const std::size_t count = rows_.get().row_count();
+            const auto& state = guard_->state();
+            const std::size_t count = state.rows.row_count();
             for (VirtualId id = 0; id < count; ++id) {
                 const detail::TargetId target = visible_target(id);
                 if (target == detail::no_target) {
                     continue;
                 }
-                auto value = store_.get().resolve(target);
+                auto value = state.store.resolve(target);
                 if (value) {
                     std::invoke(fn, id, value->get());
                 }
@@ -110,23 +112,17 @@ public:
 
         Snapshot(
             CommitId commit_id,
-            const detail::RowIndex& rows,
-            const detail::VersionStore<T>& store,
-            std::shared_ptr<detail::SnapshotGuard> guard)
+            std::shared_ptr<detail::SnapshotGuard<T>> guard)
             : commit_id_(commit_id),
-              rows_(rows),
-              store_(store),
               guard_(std::move(guard)) {}
 
         [[nodiscard]] detail::TargetId visible_target(
             VirtualId id) const noexcept {
-            return rows_.get().visible_target(id, commit_id_);
+            return guard_->state().rows.visible_target(id, commit_id_);
         }
 
         CommitId commit_id_;
-        std::reference_wrapper<const detail::RowIndex> rows_;
-        std::reference_wrapper<const detail::VersionStore<T>> store_;
-        std::shared_ptr<detail::SnapshotGuard> guard_;
+        std::shared_ptr<detail::SnapshotGuard<T>> guard_;
     };
 
     class Transaction {
@@ -152,10 +148,10 @@ public:
 
             overlay_.prepare_insert(1);
             created_targets_.reserve(created_targets_.size() + 1);
-            owner_.store_->reserve_reclamation(
+            owner_.state_->store.reserve_reclamation(
                 created_targets_.size() + 1);
 
-            const TargetId target = owner_.store_->emplace(
+            const TargetId target = owner_.state_->store.emplace(
                 1, std::forward<Args>(args)...);
             const VirtualId id = owner_.next_virtual_id_;
             overlay_.set(id, target);
@@ -171,10 +167,10 @@ public:
 
             overlay_.prepare_insert(1);
             created_targets_.reserve(created_targets_.size() + 1);
-            owner_.store_->reserve_reclamation(
+            owner_.state_->store.reserve_reclamation(
                 created_targets_.size() + 1);
 
-            const TargetId target = owner_.store_->emplace(
+            const TargetId target = owner_.state_->store.emplace(
                 1, std::forward<Args>(args)...);
             overlay_.set(id, target);
             created_targets_.push_back(target);
@@ -210,7 +206,7 @@ public:
             if (target == detail::no_target) {
                 throw std::out_of_range("virtual ID is not visible");
             }
-            auto value = owner_.store_->resolve(target);
+            auto value = owner_.state_->store.resolve(target);
             if (!value) {
                 throw std::out_of_range("visible target is unavailable");
             }
@@ -228,7 +224,7 @@ public:
             if (target == detail::no_target) {
                 return std::nullopt;
             }
-            return owner_.store_->resolve(target);
+            return owner_.state_->store.resolve(target);
         }
 
         Snapshot commit() {
@@ -267,14 +263,14 @@ public:
 
             const CommitId next_commit =
                 owner_.commits_.head_commit() + 1;
-            owner_.store_->reserve_reclamation(
+            owner_.state_->store.reserve_reclamation(
                 created_targets_.size() + 1);
 
             std::unique_lock history_lock{owner_.history_mutex_};
             detail::CommitBuilder builder{
                 next_commit,
                 parent_.commit_id(),
-                *owner_.rows_,
+                owner_.state_->rows,
                 owner_.commits_,
                 owner_.current_targets_,
                 std::move(diffs),
@@ -302,15 +298,15 @@ public:
             history_lock.unlock();
 
             for (const TargetId target : acquired) {
-                owner_.store_->acquire_view(target);
+                owner_.state_->store.acquire_view(target);
             }
             for (const TargetId target : created_targets_) {
                 if (!contains_target(transferred, target)) {
-                    owner_.store_->release_view(target);
+                    owner_.state_->store.release_view(target);
                 }
             }
             created_targets_.clear();
-            owner_.store_->drain_retirements();
+            owner_.state_->store.drain_retirements();
             active_ = false;
             writer_lock_.unlock();
             return result;
@@ -375,10 +371,10 @@ public:
 
         void discard_staged() noexcept {
             for (const TargetId target : created_targets_) {
-                owner_.store_->release_view(target);
+                owner_.state_->store.release_view(target);
             }
             created_targets_.clear();
-            owner_.store_->drain_retirements();
+            owner_.state_->store.drain_retirements();
         }
 
         MVCCHive& owner_;
@@ -391,15 +387,13 @@ public:
     };
 
     MVCCHive()
-        : store_(std::make_unique<detail::VersionStore<T>>()),
-          rows_(std::make_unique<detail::RowIndex>()),
+        : state_(std::make_shared<detail::HiveState<T>>()),
           snapshots_(std::make_shared<detail::SnapshotRegistry>()) {}
 
     ~MVCCHive() {
         std::lock_guard lock{writer_mutex_};
         snapshots_.reset();
-        rows_.reset();
-        store_.reset();
+        state_.reset();
     }
 
     MVCCHive(const MVCCHive&) = delete;
@@ -408,6 +402,7 @@ public:
     MVCCHive& operator=(MVCCHive&&) = delete;
 
     [[nodiscard]] Snapshot head() const {
+        std::shared_lock lock{history_mutex_};
         return make_snapshot(commits_.head_commit());
     }
 
@@ -497,15 +492,15 @@ public:
             oldest_snapshot = snapshot_id;
         }
 
-        current_targets_.ensure_size(rows_->row_count());
+        current_targets_.ensure_size(state_->rows.row_count());
         auto row_plan =
-            rows_->prepare_prune(first, oldest_snapshot);
+            state_->rows.prepare_prune(first, oldest_snapshot);
         owner_store_reserve(row_plan.released_targets().size());
 
         commits_.apply_prune(std::move(commit_plan));
-        rows_->apply_prune(row_plan);
+        state_->rows.apply_prune(row_plan);
         release_targets(row_plan.released_targets());
-        current_targets_.rebuild(*rows_, head);
+        current_targets_.rebuild(state_->rows, head);
     }
 
     void clear_history() {
@@ -525,57 +520,54 @@ public:
             oldest_snapshot = snapshot_id;
         }
 
-        current_targets_.ensure_size(rows_->row_count());
+        current_targets_.ensure_size(state_->rows.row_count());
         auto row_plan =
-            rows_->prepare_prune(head, oldest_snapshot);
+            state_->rows.prepare_prune(head, oldest_snapshot);
         owner_store_reserve(row_plan.released_targets().size());
 
         commits_.apply_prune(std::move(commit_plan));
-        rows_->apply_prune(row_plan);
+        state_->rows.apply_prune(row_plan);
         release_targets(row_plan.released_targets());
-        current_targets_.rebuild(*rows_, head);
+        current_targets_.rebuild(state_->rows, head);
     }
 
     void clear() {
         std::unique_lock writer_lock{writer_mutex_};
         std::unique_lock history_lock{history_mutex_};
 
-        auto fresh_store =
-            std::make_unique<detail::VersionStore<T>>();
-        auto fresh_rows = std::make_unique<detail::RowIndex>();
+        auto fresh_state =
+            std::make_shared<detail::HiveState<T>>();
         auto fresh_snapshots =
             std::make_shared<detail::SnapshotRegistry>();
 
         commits_.clear();
         snapshots_ = std::move(fresh_snapshots);
-        rows_ = std::move(fresh_rows);
-        store_ = std::move(fresh_store);
+        state_ = std::move(fresh_state);
         current_targets_.clear();
         next_virtual_id_ = 0;
     }
 
 private:
     [[nodiscard]] Snapshot make_snapshot(CommitId id) const {
-        auto guard = std::make_shared<detail::SnapshotGuard>(
-            snapshots_, id);
+        auto guard = std::make_shared<detail::SnapshotGuard<T>>(
+            snapshots_, id, state_);
         snapshots_->add(id);
         guard->mark_registered();
-        return Snapshot{id, *rows_, *store_, std::move(guard)};
+        return Snapshot{id, std::move(guard)};
     }
 
     void owner_store_reserve(std::size_t additional) {
-        store_->reserve_reclamation(additional);
+        state_->store.reserve_reclamation(additional);
     }
 
     void release_targets(const std::vector<TargetId>& targets) noexcept {
         for (const TargetId target : targets) {
-            store_->release_view(target);
+            state_->store.release_view(target);
         }
-        store_->drain_retirements();
+        state_->store.drain_retirements();
     }
 
-    std::unique_ptr<detail::VersionStore<T>> store_;
-    std::unique_ptr<detail::RowIndex> rows_;
+    std::shared_ptr<detail::HiveState<T>> state_;
     std::shared_ptr<detail::SnapshotRegistry> snapshots_;
     detail::CommitStore commits_;
     detail::CurrentTargetCache current_targets_;

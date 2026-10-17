@@ -2,11 +2,8 @@
 
 #include <mvcc_hive/detail/layout.hpp>
 
-#include <cstddef>
-#include <memory>
 #include <mutex>
 #include <set>
-#include <utility>
 
 namespace mvcc_hive::detail {
 
@@ -41,40 +38,6 @@ public:
 private:
     mutable std::mutex mutex_;
     std::multiset<CommitId> active_commits_;
-};
-
-class SnapshotGuard {
-public:
-    SnapshotGuard(
-        std::weak_ptr<SnapshotRegistry> registry,
-        CommitId commit_id) noexcept
-        : registry_(std::move(registry)),
-          commit_id_(commit_id) {}
-
-    SnapshotGuard(const SnapshotGuard&) = delete;
-    SnapshotGuard& operator=(const SnapshotGuard&) = delete;
-
-    ~SnapshotGuard() {
-        if (!registered_) {
-            return;
-        }
-        if (const auto registry = registry_.lock()) {
-            registry->remove(commit_id_);
-        }
-    }
-
-    void mark_registered() noexcept {
-        registered_ = true;
-    }
-
-    [[nodiscard]] bool valid() const noexcept {
-        return !registry_.expired();
-    }
-
-private:
-    std::weak_ptr<SnapshotRegistry> registry_;
-    CommitId commit_id_;
-    bool registered_ = false;
 };
 
 }  // namespace mvcc_hive::detail

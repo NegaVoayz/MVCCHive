@@ -22,11 +22,11 @@ There are four cooperating layers:
 
 1. `VersionStore<T>` owns stable payload blocks and their SoA metadata.
 2. `RowIndex` owns stable row heads and the row-node arena. It is the
-   snapshot-visible row state and is owned by the hive, not by snapshots.
+   snapshot-visible row state and lives in the shared generation state.
 3. `CommitStore` owns commit metadata and the normalized diff log.
-4. `MVCCHive<T>` owns `VersionStore`, `RowIndex`, and the writer-only
-   `current_targets` cache, and coordinates transactions, snapshots,
-   publication, and pruning.
+4. `MVCCHive<T>` shares the current `VersionStore` and `RowIndex` generation
+   with snapshot guards, owns the writer-only `current_targets` cache, and
+   coordinates transactions, snapshots, publication, and pruning.
 
 The old `FreeChain`, ownership `book`, temporary payload array, and physical
 slot swapping disappear entirely.
@@ -63,9 +63,10 @@ slot swapping disappear entirely.
   performs no allocation or construction.
 - `current_targets` is a derived writer-only cache. The row head is the
   authoritative current mapping, and the cache can be rebuilt after a fault.
-- `MVCCHive` is the sole owner of `VersionStore` and `RowIndex`. Snapshots and
-  transactions are non-owning child handles; destroying the hive destroys the
-  store and all remaining payloads immediately.
+- The hive and its snapshot guards share ownership of a generation containing
+  `VersionStore` and `RowIndex`. `clear()` replaces the current generation and
+  invalidates old handles; unreachable generation storage is destroyed when
+  its last guard is released. Transactions remain writer-locked child handles.
 - Caller-visible target history uses opaque `VersionToken` values; packing,
   directory pages, view counters, and locks are private.
 - Payload liveness uses atomic per-slot view counters and deferred retirement;

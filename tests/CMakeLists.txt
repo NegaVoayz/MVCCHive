@@ -11,7 +11,12 @@ add_executable(mvcc_hive_transaction_test transaction_test.cpp)
 target_link_libraries(mvcc_hive_transaction_test PRIVATE mvcc_hive)
 
 add_executable(mvcc_hive_prune_test prune_test.cpp)
-target_link_libraries(mvcc_hive_prune_test PRIVATE mvcc_hive)
+find_package(Threads REQUIRED)
+target_link_libraries(
+    mvcc_hive_prune_test
+    PRIVATE
+        mvcc_hive
+        Threads::Threads)
 
 add_test(NAME mvcc_hive_layout COMMAND mvcc_hive_layout_test)
 add_test(NAME mvcc_hive_storage COMMAND mvcc_hive_storage_test)

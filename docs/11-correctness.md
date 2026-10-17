@@ -130,3 +130,6 @@ The implementation should assert or enforce all of the following:
     target remains anchored for the transaction's lifetime.
 57. A transaction never copies the parent projection; its space is `O(k + q)`
     for `k` touched IDs and `q` constructed staged versions.
+58. Commit records and diffs use power-of-two blocked storage. Crossing a
+    block boundary allocates the next block during prepare; publication
+    performs no allocation and never copies retained history.

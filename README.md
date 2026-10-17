@@ -1,6 +1,6 @@
 # MVCCHive
 
-C++23 header-only MVCC hive. Version 1.0.1.
+C++23 header-only MVCC hive. Version 1.0.2.
 
 The single-writer design is implemented: stable placement-constructed
 payloads, per-row MVCC chains, immutable snapshots, transaction overlays,
@@ -10,8 +10,9 @@ safe generation replacement for `clear()` and teardown.
 Multiwriter row locks remain the explicit post-1.0 boundary. The current
 writer model is one writer with any number of concurrent snapshot readers.
 
-Version 1.0.1 fixes commit-log growth so a commit remains amortized `O(k)` in
-the number of changed rows rather than reallocating retained history.
+Version 1.0.2 stores commit records and diffs in preallocated fixed-size blocks
+so a commit remains `O(k)` in the number of changed rows without reallocating
+or copying retained history.
 
 - [Design documentation](docs/README.md)
 - [Implementation plan](docs/13-implementation-plan.md)

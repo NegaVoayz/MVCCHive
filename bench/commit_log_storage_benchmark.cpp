@@ -1,3 +1,4 @@
+#include <mvcc_hive/detail/blocked_vector.hpp>
 #include <mvcc_hive/detail/commit_store.hpp>
 
 #include <algorithm>
@@ -11,6 +12,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 using mvcc_hive::Diff;
+using mvcc_hive::detail::BlockedVector;
 using mvcc_hive::detail::CommitRecord;
 
 constexpr std::size_t sample_count = 1000;
@@ -32,6 +34,24 @@ void append_amortized(Container& values) {
 double microseconds(Clock::duration duration) {
     return std::chrono::duration<double, std::micro>(duration).count() /
            static_cast<double>(sample_count);
+}
+
+template<std::size_t BlockCapacity>
+double blocked_vector_microseconds(std::size_t history_size) {
+    BlockedVector<CommitRecord, BlockCapacity> commits;
+    BlockedVector<Diff, BlockCapacity> diffs;
+    for (std::size_t i = 0; i < history_size; ++i) {
+        commits.push_back(CommitRecord{});
+        diffs.push_back(Diff{});
+    }
+    const auto start = Clock::now();
+    for (std::size_t sample = 0; sample < sample_count; ++sample) {
+        commits.reserve(1);
+        commits.append_prepared(CommitRecord{});
+        diffs.reserve(1);
+        diffs.append_prepared(Diff{});
+    }
+    return microseconds(Clock::now() - start);
 }
 
 void run(std::size_t history_size) {
@@ -69,6 +89,12 @@ void run(std::size_t history_size) {
               << " exact_vector_us=" << microseconds(exact_end - exact_start)
               << " grown_vector_us=" << microseconds(grown_end - grown_start)
               << " deque_us=" << microseconds(deque_end - deque_start)
+              << " blocked_512_us="
+              << blocked_vector_microseconds<512>(history_size)
+              << " blocked_2048_us="
+              << blocked_vector_microseconds<2048>(history_size)
+              << " blocked_8192_us="
+              << blocked_vector_microseconds<8192>(history_size)
               << '\n';
 }
 

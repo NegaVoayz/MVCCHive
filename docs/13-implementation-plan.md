@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: version 1.0.1. M0 through M6 are implemented for the single-writer
+Status: version 1.0.2. M0 through M6 are implemented for the single-writer
 design. Multiwriter row locking remains the intentional post-1.0 boundary.
 
 The first goal is a small, testable vertical slice that proves the layout,
@@ -18,6 +18,7 @@ include/mvcc_hive/
     version_block.hpp            VersionBlock<T> and block metadata
     block_directory.hpp          stable paged reader directory
     version_store.hpp            block ownership, placement lifetime, retirement
+    blocked_vector.hpp           preallocated fixed-size commit/diff log blocks
     row_index.hpp                row pages, row heads, node chunks, pruning
     commit_store.hpp             commit records and normalized diff log
     commit_builder.hpp           prepare/publish commit construction

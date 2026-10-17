@@ -20,7 +20,7 @@ by a commit.
 | Erase | `O(1)` commit work |
 | Swap | `O(1)` commit work, no `T` construction |
 | Commit with `k` changed IDs | `O(k)` row-version nodes |
-| Commit-log append | amortized `O(1)` per commit/diff; capacity grows geometrically during the throwing prepare phase |
+| Commit-log append | `O(1)` per commit/diff using preallocated fixed-size blocks |
 | Current full scan | `O(V)` |
 | Historical full scan | `O(V + skipped row versions)` |
 | Target resolution | `O(1)`: shift/mask decode, one block-directory load, one payload offset |
@@ -37,8 +37,9 @@ The common current-view read performs no division, no modulus, no store lock,
 and no per-read atomic increment. Atomic work is confined to row-head
 publication, snapshot-horizon updates, and retirement.
 
-Commit publication still performs no allocation. The commit and diff vectors
-grow geometrically during `CommitBuilder::prepare`; public `push_back` calls
-then run inside the reserved capacity. Reserving exactly `size + 1` would force
-a full-history copy on every commit and is explicitly covered by a capacity
-regression test.
+Commit publication still performs no allocation. Commit records and diffs live
+in `BlockedVector` logs with 2048-slot blocks (64 KiB for the 32-byte records).
+Indexing is one shift and mask. If an append crosses a block boundary,
+`CommitBuilder::prepare` allocates the next block; publication only writes
+inside the already-allocated block. A blocked-vector boundary test guards this
+contract.

@@ -102,6 +102,11 @@ The diff log is append-only for the retained history window. Commit IDs start
 at 1; commit 0 means "before the first retained commit" where that distinction
 is needed.
 
+The append-only commit and diff logs use fixed-size blocked storage rather than
+a monolithic reallocating vector. The next block is prepared before a commit
+crosses its current block boundary, so retained history is never copied during
+publication.
+
 For the initial implementation the timeline is linear:
 
 - a transaction extends the current head;

@@ -208,35 +208,35 @@ void check_current_cache_rebuild() {
     REQUIRE(fixture.current.get(0) == second);
 }
 
-void check_commit_log_capacity_grows_geometrically() {
+void check_commit_log_uses_preallocated_blocks() {
+    using Commits =
+        mvcc_hive::detail::BlockedVector<
+            mvcc_hive::detail::CommitRecord>;
+    constexpr std::size_t block_capacity =
+        Commits::block_capacity;
+
     CommitStore store;
 
     store.reserve(1, 1);
-    const std::size_t first_commit_capacity =
+    const std::size_t initial_commit_capacity =
         store.commit_capacity();
-    const std::size_t first_diff_capacity =
+    const std::size_t initial_diff_capacity =
         store.diff_capacity();
-    REQUIRE(first_commit_capacity >= 1);
-    REQUIRE(first_diff_capacity >= 1);
+    REQUIRE(initial_commit_capacity == block_capacity);
+    REQUIRE(initial_diff_capacity == block_capacity);
 
     const Diff record = diff(1, 0, no_target, 0);
-    store.append_prepared(1, 0, std::span{&record, 1});
-    store.publish_head(1);
+    for (std::size_t i = 1; i <= block_capacity; ++i) {
+        store.reserve(1, 1);
+        store.append_prepared(i, i - 1, std::span{&record, 1});
+        store.publish_head(i);
+        REQUIRE(store.commit_capacity() == initial_commit_capacity);
+        REQUIRE(store.diff_capacity() == initial_diff_capacity);
+    }
 
     store.reserve(1, 1);
-    const std::size_t second_commit_capacity =
-        store.commit_capacity();
-    const std::size_t second_diff_capacity =
-        store.diff_capacity();
-    REQUIRE(second_commit_capacity >= first_commit_capacity * 2);
-    REQUIRE(second_diff_capacity >= first_diff_capacity * 2);
-
-    store.append_prepared(2, 1, std::span{&record, 1});
-    store.publish_head(2);
-
-    store.reserve(1, 1);
-    REQUIRE(store.commit_capacity() >= 4);
-    REQUIRE(store.diff_capacity() >= 4);
+    REQUIRE(store.commit_capacity() == block_capacity * 2);
+    REQUIRE(store.diff_capacity() == block_capacity * 2);
 }
 
 void check_row_pruning_keeps_snapshot_tail() {
@@ -323,7 +323,7 @@ int main() {
     check_tombstone_visibility();
     check_prepare_failure_rolls_back_nodes();
     check_current_cache_rebuild();
-    check_commit_log_capacity_grows_geometrically();
+    check_commit_log_uses_preallocated_blocks();
     check_row_pruning_keeps_snapshot_tail();
     check_row_chunk_directory_auto_shrinks();
 }

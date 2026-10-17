@@ -1,8 +1,8 @@
 #pragma once
 
+#include <mvcc_hive/detail/blocked_vector.hpp>
 #include <mvcc_hive/version_token.hpp>
 
-#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -10,7 +10,6 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
-#include <vector>
 
 namespace mvcc_hive::detail {
 
@@ -21,9 +20,15 @@ struct CommitRecord {
     std::size_t diff_count;
 };
 
+static_assert(sizeof(CommitRecord) == 32);
+static_assert(
+    sizeof(CommitRecord) *
+        BlockedVector<CommitRecord>::block_capacity ==
+    64 * 1024);
+
 struct PrunedCommitState {
-    std::vector<CommitRecord> commits;
-    std::vector<Diff> diffs;
+    BlockedVector<CommitRecord> commits;
+    BlockedVector<Diff> diffs;
     CommitId first_commit_id = no_commit;
 };
 
@@ -36,8 +41,8 @@ public:
     void reserve(
         std::size_t additional_commits,
         std::size_t additional_diffs) {
-        reserve_amortized(commits_, additional_commits);
-        reserve_amortized(diffs_, additional_diffs);
+        commits_.reserve(additional_commits);
+        diffs_.reserve(additional_diffs);
     }
 
     // No allocation or user code runs here.
@@ -54,9 +59,9 @@ public:
             .first_diff = diffs_.size(),
             .diff_count = diffs.size(),
         };
-        commits_.push_back(record);
+        commits_.append_prepared(record);
         for (const Diff& diff : diffs) {
-            diffs_.push_back(diff);
+            diffs_.append_prepared(diff);
         }
         if (commits_.size() == 1) {
             first_commit_id_ = id;
@@ -188,40 +193,15 @@ public:
     }
 
     void clear() noexcept {
-        std::vector<CommitRecord>{}.swap(commits_);
-        std::vector<Diff>{}.swap(diffs_);
+        commits_.clear();
+        diffs_.clear();
         head_commit_.store(no_commit, std::memory_order_release);
         first_commit_id_ = no_commit;
     }
 
 private:
-    template<class T>
-    static void reserve_amortized(
-        std::vector<T>& values,
-        std::size_t additional) {
-        if (additional > values.max_size() - values.size()) {
-            throw std::length_error("commit log capacity overflow");
-        }
-
-        const std::size_t needed = values.size() + additional;
-        if (needed <= values.capacity()) {
-            return;
-        }
-
-        const std::size_t maximum = values.max_size();
-        std::size_t grown = values.capacity();
-        if (grown == 0) {
-            grown = needed;
-        } else if (grown > maximum / 2) {
-            grown = maximum;
-        } else {
-            grown *= 2;
-        }
-        values.reserve(std::max(needed, grown));
-    }
-
-    std::vector<CommitRecord> commits_;
-    std::vector<Diff> diffs_;
+    BlockedVector<CommitRecord> commits_;
+    BlockedVector<Diff> diffs_;
     std::atomic<CommitId> head_commit_{no_commit};
     CommitId first_commit_id_ = no_commit;
 };

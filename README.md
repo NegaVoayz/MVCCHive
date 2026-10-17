@@ -2,8 +2,8 @@
 
 C++23 MVCC hive design and implementation workspace.
 
-Status: implementation started; M1 layout and sentinel invariants are in
-place. Storage and transaction work is in progress.
+Status: implementation started; M1 layout and M2 version storage are in
+place. Row history and transaction work is in progress.
 
 - [Design documentation](docs/README.md)
 - [Implementation plan](docs/13-implementation-plan.md)

@@ -89,6 +89,13 @@ If a target platform reports the atomic optional reference as not lock-free,
 the private directory may fall back to a paged table guarded by a short
 reader-writer lock; that fallback does not affect the row-node index design.
 
+Implementation note: the current MinGW/GCC target reports the atomic optional
+reference as 16 bytes and not lock-free. The first storage implementation
+therefore uses the paged fallback with a shared mutex. The directory lookup is
+isolated in `detail/block_directory.hpp` so a platform-specialized lock-free
+publication layer can replace it without changing `VersionStore` or row
+history.
+
 The power-of-two block capacity gives the same benefit at the directory level:
 `block_index` can be split into page index and page offset with shifts and
 masks rather than division.

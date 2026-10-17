@@ -1,7 +1,6 @@
 # Implementation plan
 
-Status: M0 and M1 are implemented. Storage and row-history work is in
-progress.
+Status: M0, M1, and M2 are implemented. Row-history work is in progress.
 
 The first goal is a small, testable vertical slice that proves the layout,
 payload lifetime, row-chain resolution, and commit publication rules before
@@ -63,6 +62,15 @@ Acceptance: layout tests cover `sizeof(T)` 8, 64, 128, and 392 bytes; target
 zero is live; no live target equals `no_target`.
 
 ### M2: Version storage
+
+Status: implemented in `detail/version_block.hpp`,
+`detail/block_directory.hpp`, `detail/version_store.hpp`, and
+`tests/storage_test.cpp`.
+
+- The initial block directory uses stable pages plus a short shared-lock
+  fallback. The compiler reports that
+  `std::atomic<std::optional<std::reference_wrapper<T>>>` is 16 bytes and not
+  lock-free on the MinGW/GCC target, so it is not used on the hot path yet.
 
 - Allocate `VersionBlock<T>` with raw aligned payload bytes.
 - Add free-bit allocation, per-slot view counters, and block live counts.

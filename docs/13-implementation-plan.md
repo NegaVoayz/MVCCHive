@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: version 1.0.0. M0 through M6 are implemented for the single-writer
+Status: version 1.0.1. M0 through M6 are implemented for the single-writer
 design. Multiwriter row locking remains the intentional post-1.0 boundary.
 
 The first goal is a small, testable vertical slice that proves the layout,
@@ -189,7 +189,7 @@ That slice validated the two central bets:
 1. payloads can remain completely stable while row heads move;
 2. snapshot reads are row-chain resolution, not projection copies.
 
-The 1.0.0 implementation adds pruning, safe generation replacement, and the
+The 1.0.x implementation adds pruning, safe generation replacement, and the
 test coverage described above.
 
 ## Settled implementation decisions
@@ -204,7 +204,7 @@ test coverage described above.
   capacity.
 - The public namespace is `mvcc_hive`.
 
-## Non-goals for 1.0.0
+## Non-goals for 1.0.x
 
 - Concurrent write transactions.
 - Branching or mergeable commit graphs.

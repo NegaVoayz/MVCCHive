@@ -2,6 +2,7 @@
 
 #include <mvcc_hive/version_token.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -35,8 +36,8 @@ public:
     void reserve(
         std::size_t additional_commits,
         std::size_t additional_diffs) {
-        commits_.reserve(commits_.size() + additional_commits);
-        diffs_.reserve(diffs_.size() + additional_diffs);
+        reserve_amortized(commits_, additional_commits);
+        reserve_amortized(diffs_, additional_diffs);
     }
 
     // No allocation or user code runs here.
@@ -76,6 +77,14 @@ public:
 
     [[nodiscard]] std::size_t diff_count() const noexcept {
         return diffs_.size();
+    }
+
+    [[nodiscard]] std::size_t commit_capacity() const noexcept {
+        return commits_.capacity();
+    }
+
+    [[nodiscard]] std::size_t diff_capacity() const noexcept {
+        return diffs_.capacity();
     }
 
     [[nodiscard]] CommitId first_commit_id() const noexcept {
@@ -186,6 +195,31 @@ public:
     }
 
 private:
+    template<class T>
+    static void reserve_amortized(
+        std::vector<T>& values,
+        std::size_t additional) {
+        if (additional > values.max_size() - values.size()) {
+            throw std::length_error("commit log capacity overflow");
+        }
+
+        const std::size_t needed = values.size() + additional;
+        if (needed <= values.capacity()) {
+            return;
+        }
+
+        const std::size_t maximum = values.max_size();
+        std::size_t grown = values.capacity();
+        if (grown == 0) {
+            grown = needed;
+        } else if (grown > maximum / 2) {
+            grown = maximum;
+        } else {
+            grown *= 2;
+        }
+        values.reserve(std::max(needed, grown));
+    }
+
     std::vector<CommitRecord> commits_;
     std::vector<Diff> diffs_;
     std::atomic<CommitId> head_commit_{no_commit};

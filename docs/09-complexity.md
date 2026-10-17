@@ -20,6 +20,7 @@ by a commit.
 | Erase | `O(1)` commit work |
 | Swap | `O(1)` commit work, no `T` construction |
 | Commit with `k` changed IDs | `O(k)` row-version nodes |
+| Commit-log append | amortized `O(1)` per commit/diff; capacity grows geometrically during the throwing prepare phase |
 | Current full scan | `O(V)` |
 | Historical full scan | `O(V + skipped row versions)` |
 | Target resolution | `O(1)`: shift/mask decode, one block-directory load, one payload offset |
@@ -35,3 +36,9 @@ cannot be merged without relocating `T`.
 The common current-view read performs no division, no modulus, no store lock,
 and no per-read atomic increment. Atomic work is confined to row-head
 publication, snapshot-horizon updates, and retirement.
+
+Commit publication still performs no allocation. The commit and diff vectors
+grow geometrically during `CommitBuilder::prepare`; public `push_back` calls
+then run inside the reserved capacity. Reserving exactly `size + 1` would force
+a full-history copy on every commit and is explicitly covered by a capacity
+regression test.

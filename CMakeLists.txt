@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(mvcc_hive VERSION 1.0.0 LANGUAGES CXX)
+project(mvcc_hive VERSION 1.0.1 LANGUAGES CXX)
 
 add_library(mvcc_hive INTERFACE)
 
@@ -12,8 +12,13 @@ target_include_directories(
 )
 
 option(MVCC_HIVE_BUILD_TESTS "Build MVCCHive tests" ON)
+option(MVCC_HIVE_BUILD_BENCHMARKS "Build MVCCHive microbenchmarks" OFF)
 
 if(MVCC_HIVE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(MVCC_HIVE_BUILD_BENCHMARKS)
+    add_subdirectory(bench)
 endif()

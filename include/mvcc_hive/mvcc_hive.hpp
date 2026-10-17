@@ -1,13 +1,18 @@
 #pragma once
 
-// Public entry point for MVCCHive.
-//
-// The design is documented in docs/. Implementation starts with the layout,
-// storage, and row-index milestones in docs/13-implementation-plan.md.
+#include <mvcc_hive/version_token.hpp>
+
+#include <cstddef>
 
 namespace mvcc_hive {
 
 template<class T>
-class MVCCHive;
+class MVCCHive {
+public:
+    using CommitId = detail::CommitId;
+    using VirtualId = detail::VirtualId;
+    using VersionToken = mvcc_hive::VersionToken;
+    using Diff = mvcc_hive::Diff;
+};
 
 }  // namespace mvcc_hive

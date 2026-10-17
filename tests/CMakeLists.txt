@@ -1,4 +1,4 @@
-add_executable(mvcc_hive_smoke smoke.cpp)
-target_link_libraries(mvcc_hive_smoke PRIVATE mvcc_hive)
+add_executable(mvcc_hive_layout_test layout_test.cpp)
+target_link_libraries(mvcc_hive_layout_test PRIVATE mvcc_hive)
 
-add_test(NAME mvcc_hive_smoke COMMAND mvcc_hive_smoke)
+add_test(NAME mvcc_hive_layout COMMAND mvcc_hive_layout_test)

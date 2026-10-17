@@ -1,6 +1,7 @@
 # Implementation plan
 
-Status: scaffolding only. No MVCC behavior is implemented yet.
+Status: M0 and M1 are implemented. Storage and row-history work is in
+progress.
 
 The first goal is a small, testable vertical slice that proves the layout,
 payload lifetime, row-chain resolution, and commit publication rules before
@@ -47,6 +48,9 @@ Acceptance: configure, build, and `ctest` succeed with no warnings from the
 project headers.
 
 ### M1: Layout and sentinel invariants
+
+Status: implemented in `detail/layout.hpp`, `version_token.hpp`, and
+`tests/layout_test.cpp`.
 
 - Implement `BlockLayout<T>` with the 16 KiB payload budget and power-of-two
   capacities.

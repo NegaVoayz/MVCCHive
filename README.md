@@ -2,7 +2,8 @@
 
 C++23 MVCC hive design and implementation workspace.
 
-Status: design split complete; implementation scaffold only.
+Status: implementation started; M1 layout and sentinel invariants are in
+place. Storage and transaction work is in progress.
 
 - [Design documentation](docs/README.md)
 - [Implementation plan](docs/13-implementation-plan.md)
@@ -15,5 +16,5 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
-The current header is a placeholder. The first implementation slice is
-described in the implementation plan.
+The current public header exposes the stable identifier and token types. The
+internal layout layer is tested independently of storage allocation.

@@ -1,7 +1,7 @@
 # Implementation plan
 
-Status: M0 through M5 are implemented. Concurrency stress testing and model
-validation remain.
+Status: version 1.0.0. M0 through M6 are implemented for the single-writer
+design. Multiwriter row locking remains the intentional post-1.0 boundary.
 
 The first goal is a small, testable vertical slice that proves the layout,
 payload lifetime, row-chain resolution, and commit publication rules before
@@ -12,21 +12,25 @@ adding pruning and multi-writer work.
 ```text
 include/mvcc_hive/
   mvcc_hive.hpp                  public entry point and MVCCHive<T>
+  version_token.hpp              public opaque target token and Diff
   detail/
-    block_layout.hpp             BlockLayout<T>, target encode/decode
+    layout.hpp                   BlockLayout<T>, RowNodeLayout, sentinels
     version_block.hpp            VersionBlock<T> and block metadata
-    stable_directory.hpp         stable paged reader directories
+    block_directory.hpp          stable paged reader directory
     version_store.hpp            block ownership, placement lifetime, retirement
-    row_node_arena.hpp           RowNodeChunk and RowNodeId allocation
-    row_index.hpp                row pages, row heads, node directory
+    row_index.hpp                row pages, row heads, node chunks, pruning
     commit_store.hpp             commit records and normalized diff log
-    transaction.hpp              overlay, staging, commit builder
-    snapshot.hpp                 snapshot resolution and guard
+    commit_builder.hpp           prepare/publish commit construction
+    current_targets.hpp          derived writer-only current-target cache
+    transaction_overlay.hpp      flat transaction write overlay
+    snapshot_registry.hpp        active snapshot horizon
+    snapshot_state.hpp           shared generation and snapshot guard
 tests/
   layout_test.cpp
   storage_test.cpp
   history_test.cpp
-  transaction_lookup_test.cpp
+  transaction_test.cpp
+  prune_test.cpp
   lifetime_test.cpp
   concurrency_test.cpp
   model_test.cpp
@@ -147,18 +151,31 @@ destroyed safely when the last snapshot guard is released.
 
 ### M6: Concurrency and model testing
 
-- Run one committing writer with multiple snapshot readers under TSAN.
-- Exercise final-view retirement and block release.
-- Add a randomized reference-model test over commit IDs, virtual IDs, and
-  values.
-- Leave the row-lock manager as the explicit multi-writer seam.
+Status: implemented in `tests/concurrency_test.cpp`,
+`tests/model_test.cpp`, `tests/lifetime_test.cpp`, and the existing storage
+and pruning suites.
+
+- Exercise one committing writer with multiple snapshot readers, including
+  concurrent pruning and history clearing.
+- Exercise repeated replacement, final-view retirement, block release, and
+  cache repair.
+- Add randomized reference-model coverage over commit IDs, virtual IDs,
+  values, snapshots, pruning, history clearing, and destructive clear.
+- Verify alignment, overloaded `operator&`, and address stability through the
+  public hive.
+- Leave the row-lock manager as the explicit multiwriter seam.
+
+The stress suite is available for ThreadSanitizer on platforms that provide a
+TSAN runtime. The MinGW/GCC toolchain used for the 1.0.0 build does not ship
+`libtsan`, `libasan`, or `libubsan`, so those sanitizer runs remain an external
+validation step.
 
 Acceptance: no reader can observe a destroyed payload, no target is recycled
 while anchored, and the reference model matches every snapshot.
 
-## First vertical slice
+## Historical first vertical slice
 
-The first implementation should stop after a narrow version of M1-M4:
+The initial vertical slice was intentionally narrow:
 
 - one payload type whose size is known at compile time;
 - one writer;
@@ -167,29 +184,29 @@ The first implementation should stop after a narrow version of M1-M4:
 - no multi-writer row locks;
 - no history compaction beyond normal commit append.
 
-That slice is enough to validate the two central bets:
+That slice validated the two central bets:
 
 1. payloads can remain completely stable while row heads move;
 2. snapshot reads are row-chain resolution, not projection copies.
 
-## Open decisions to settle during implementation
+The 1.0.0 implementation adds pruning, safe generation replacement, and the
+test coverage described above.
 
-- Confirm `std::atomic<std::optional<std::reference_wrapper<...>>>` is
-  lock-free on the target platform, or activate the documented fallback for
-  the block and row-node directories.
-- Confirm `std::atomic<RowNodeId>` and `std::atomic<CommitId>` are lock-free.
-- Measure whether one node-chunk directory load per row-chain step is
-  acceptable; retain the index representation unless profiling shows a
-  material regression.
-- Confirm the 16 KiB payload budget against the expected `T` sizes and cache
-  behavior.
-- Decide whether the public namespace is `mvcc_hive` or a project-specific
-  alias before the first public header is finalized.
+## Settled implementation decisions
 
-## Non-goals for the first implementation
+- The MinGW/GCC target does not provide a lock-free atomic optional block
+  reference, so the stable paged directory with a short lock is the shipped
+  fallback.
+- `std::atomic<RowNodeId>` and `std::atomic<CommitId>` are required
+  lock-free and asserted at compile time.
+- Row-node chunks retain the compact shift/mask index representation.
+- `VersionBlock<T>` uses a 16 KiB payload budget with adaptive power-of-two
+  capacity.
+- The public namespace is `mvcc_hive`.
+
+## Non-goals for 1.0.0
 
 - Concurrent write transactions.
 - Branching or mergeable commit graphs.
-- Snapshot handles that outlive their hive.
 - Block compaction that moves a live `T`.
 - Predicate locks or serializable read-write validation.

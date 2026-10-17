@@ -138,9 +138,10 @@
 - Directory growth and block release never invoke a `T` move or copy.
 - Iterating or updating free-slot metadata does not read or write payload
   bytes.
-- A ThreadSanitizer stress test runs one committing writer with multiple
-  snapshot readers, including readers retaining old commits while the directory
-  grows and blocks are retired.
+- A concurrency stress test runs one committing writer with multiple snapshot
+  readers, including readers retaining old commits while history is pruned and
+  blocks are retired. It is also the ThreadSanitizer entry point on platforms
+  that provide a TSAN runtime.
 - Repeated concurrent final-view releases exercise the retirement queue and
   verify that no payload is destroyed while a reader can still reach it.
 - Concurrent copies and destructions of snapshots sharing one guard preserve
@@ -155,4 +156,5 @@
 - A visitor test holds an old snapshot while another transaction edits the same
   logical row; the visitor still observes its original target.
 - Randomized operations are checked against a reference model of
-  `CommitId -> VirtualId -> value`, including concurrent snapshot reads.
+  `CommitId -> VirtualId -> value`, including snapshots, pruning, history
+  clearing, and destructive clear.

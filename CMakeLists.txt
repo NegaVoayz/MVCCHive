@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(mvcc_hive VERSION 0.1.0 LANGUAGES CXX)
+project(mvcc_hive VERSION 1.0.0 LANGUAGES CXX)
 
 add_library(mvcc_hive INTERFACE)
 

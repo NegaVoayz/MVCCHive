@@ -1,8 +1,7 @@
 # MVCCHive design
 
-Status: design-ready for the first implementation slice. The structure is
-intentionally still subject to change as the storage and row-index primitives
-meet real compiler and concurrency testing.
+Release status: version 1.0.0 covers the single-writer design. Multiwriter row
+locking is the intentionally deferred extension.
 
 `MVCCHive<T>` is a C++23 MVCC container. Stored values are constructed once in
 stable payload slots and are never moved, copied, assigned, or swapped by the

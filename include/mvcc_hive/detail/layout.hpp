@@ -118,6 +118,7 @@ struct RowHead {
 static_assert(sizeof(RowVersionNode) == 24);
 static_assert(std::is_trivially_copyable_v<RowVersionNode>);
 static_assert(sizeof(RowHead) == 8);
+static_assert(std::atomic<CommitId>::is_always_lock_free);
 static_assert(std::atomic<RowNodeId>::is_always_lock_free);
 
 }  // namespace mvcc_hive::detail

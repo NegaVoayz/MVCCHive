@@ -292,7 +292,12 @@ The hive keeps three positions distinct:
 
 `undo()` selects the checkout's parent; `redo()` selects the next retained
 child. Both retain the tail and rebuild the writer-only current-target cache.
-They return `false` when no move is possible.
+`redo()` returns `false` when no next retained child exists. `undo()` returns
+`false` only at the empty origin (checkout 0). Undoing the original first
+commit moves to that empty origin. Reaching the oldest retained commit after
+pruning or `clear_history()` is different: `undo()` throws
+`std::logic_error("undo history has been cleared" or "pruned")` and leaves the
+checkout unchanged. It never walks into erased history.
 
 A non-empty commit prepared from an older checkout discards the redo tail. The
 new commit is prepared before the discard, so a failed prepare leaves the tail

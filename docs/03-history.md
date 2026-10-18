@@ -144,6 +144,9 @@ The timeline is linear:
 
 - a transaction extends the current checkout;
 - `undo()` selects the parent commit; `redo()` selects the next retained child;
+- undo from the original first commit selects the empty origin commit 0;
+- undo at the first retained commit after pruning or `clear_history()` is an
+  error, because its predecessor is no longer retained;
 - a successful commit after undo discards every commit newer than the checkout;
 - an empty commit preserves the redo tail;
 - historical snapshots are read-only;

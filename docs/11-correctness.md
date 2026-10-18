@@ -141,8 +141,10 @@ The implementation should assert or enforce all of the following:
     retained tip. `head()` returns the checkout; `snapshot(id)` may inspect any
     retained commit up to the tip.
 60. `undo()` moves the checkout to its retained parent; `redo()` moves it to
-    the next retained child. Neither drops retained history nor changes row
-    chains.
+    the next retained child. Undo from the original first commit may move to
+    empty commit 0. Undo at a pruned or cleared retention floor throws and
+    does not change the checkout. Neither operation drops retained history or
+    changes row chains.
 61. A non-empty commit from an older checkout prepares first, then truncates
     the redo tail in place. A failed prepare or a snapshot pinned above the
     checkout leaves the tail and checkout unchanged.

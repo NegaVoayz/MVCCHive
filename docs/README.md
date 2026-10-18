@@ -1,6 +1,6 @@
 # MVCCHive design
 
-Release status: version 2.1.0 covers the single-writer design. Multiwriter row
+Release status: version 2.1.1 covers the single-writer design. Multiwriter row
 locking is the intentionally deferred extension.
 
 `MVCCHive<T>` is a C++23 MVCC container. Stored values are constructed once in

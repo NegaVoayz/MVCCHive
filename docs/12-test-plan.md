@@ -84,6 +84,10 @@
 - Transaction rollback destroys only transaction-created versions.
 - Undo/redo round-trip tests verify that `head()` follows the checkout while
   `snapshot(id)` can still inspect the retained redo tail.
+- Undo from the original first commit reaches the empty origin; undo from a
+  fresh empty hive returns false.
+- Undo at a pruned or `clear_history()` retention floor throws
+  `std::logic_error` and leaves the checkout unchanged.
 - A replace after undo publishes a new commit at the checkout's next ID,
   removes the old future diffs, and makes `redo()` return false.
 - An empty commit after undo preserves the redo tail.

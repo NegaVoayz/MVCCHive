@@ -139,6 +139,9 @@ makes the discard fail before any row head changes.
 `prune_before(c)` requires `c` to be at or below the current checkout, because
 the checkout must remain addressable. `clear_history()` discards the redo tail
 first and keeps the checkout as its baseline.
+Undo stops at the oldest retained commit. Going below the original first
+commit to the empty origin is valid; trying to undo below a pruned or cleared
+retention floor throws and leaves the checkout unchanged.
 
 `prune_before` and `clear_history` end with the same explicit reclamation
 pass. A block still referenced by a retained row node or a live snapshot is

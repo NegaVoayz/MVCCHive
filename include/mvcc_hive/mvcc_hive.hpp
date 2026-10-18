@@ -463,12 +463,18 @@ public:
         }
         const auto index = commits_.commit_index(checkout_commit_);
         if (!index) {
-            return false;
+            throw std::logic_error(
+                "undo checkout is not retained");
         }
         const CommitId parent = commits_.commit(*index).parent;
-        if (parent != detail::no_commit &&
-            !commits_.contains_commit(parent)) {
-            return false;
+        if (parent == detail::no_commit) {
+            if (*index != 0 || commits_.first_commit_id() != 1) {
+                throw std::logic_error(
+                    "undo history has been cleared");
+            }
+        } else if (!commits_.contains_commit(parent)) {
+            throw std::logic_error(
+                "undo history has been pruned");
         }
 
         auto cache = current_targets_.prepare_rebuild(

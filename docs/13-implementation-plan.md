@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: version 2.0.0. M0 through M6 are implemented for the single-writer
+Status: version 2.1.0. M0 through M6 are implemented for the single-writer
 design. Multiwriter row locking remains the intentional post-1.0 boundary.
 
 The first goal is a small, testable vertical slice that proves the layout,
@@ -35,6 +35,7 @@ tests/
   lifetime_test.cpp
   concurrency_test.cpp
   model_test.cpp
+  undo_redo_test.cpp
 ```
 
 The library starts header-only because `MVCCHive<T>` and its storage layers are
@@ -110,14 +111,16 @@ failure changes no row head; publish performs no allocation.
 Status: implemented in `mvcc_hive.hpp`, `detail/snapshot_registry.hpp`,
 `detail/transaction_overlay.hpp`, and `tests/transaction_test.cpp`.
 
-The first writable-transaction policy requires a transaction to bind to the
-current head. Historical commits remain readable through snapshots, but
-writable rebasing onto a newer head is deferred to the multi-writer work.
+Writable transactions bind to the current checkout. Historical commits remain
+readable through snapshots; checkout movement is handled by `undo()` and
+`redo()`, while rebasing across an independently advanced head remains
+deferred to the multi-writer work.
 
 - Implement the snapshot guard registry and weak registry references.
 - Implement snapshot resolution by commit-filtered row-chain traversal.
 - Implement the flat transaction overlay for insert, replace, erase, and swap.
 - Implement `Transaction::at`/`find` overlay-first resolution.
+- Implement checkout undo/redo and redo-tail discard on the next commit.
 - Implement commit normalization and anchor transfer.
 
 Acceptance: transaction reads see their own staged changes; old snapshots see
@@ -191,7 +194,8 @@ That slice validated the two central bets:
 2. snapshot reads are row-chain resolution, not projection copies.
 
 The 1.0.x implementation adds pruning, safe generation replacement, and the
-test coverage described above.
+test coverage described above. Version 2.1 adds a linear checkout with
+retained redo and tail-discarding continuation.
 
 ## Settled implementation decisions
 
@@ -205,9 +209,10 @@ test coverage described above.
   capacity.
 - The public namespace is `mvcc_hive`.
 
-## Non-goals for 1.0.x
+## Non-goals for the single-writer line
 
 - Concurrent write transactions.
+- Branching or merging checkouts.
 - Branching or mergeable commit graphs.
 - Block compaction that moves a live `T`.
 - Predicate locks or serializable read-write validation.

@@ -5,8 +5,8 @@
 ## 1. Goal
 
 Provide a `MVCCHive<T>` that owns a sequence of immutable payload versions and
-supports snapshots, transactions, undo/redo-equivalent navigation, commit
-history, and pruning.
+supports snapshots, transactions, recoverable undo/redo navigation with
+redo-tail discard, commit history, and pruning.
 
 The central rule is:
 
@@ -69,6 +69,9 @@ payload mutations that happen to be reversible.
 - Supported concurrency is one writer with concurrent immutable snapshot
   readers.
 
+- Undo and redo move a linear checkout. The redo tail is retained until a new
+  commit is published from the checkout; that commit discards the tail.
+
 - `MVCCHive` and its `Snapshot` handles share ownership of one immutable
   generation containing the `VersionStore` and `RowIndex`. `clear()` and hive
   destruction invalidate outstanding handles immediately, while the retired
@@ -92,6 +95,8 @@ user's concern and is outside the no-move rule for stored values.
 | `RowVersionChain` | Immutable nodes ordered newest-to-oldest for one `VirtualId`, each naming a commit and the target visible from that commit onward. |
 | `CurrentTargets` | Writer-only dense cache of the target currently mapped by each `VirtualId`; rebuildable from the authoritative row heads. |
 | `Commit` | A point in the linear timeline plus its range in the diff log. |
+| `Checkout` | The commit currently selected for `head()` and writable transactions. It may be older than the retained tip. |
+| `Redo tail` | Retained commits newer than the checkout, available to `redo()` until a new commit is published. |
 | `Snapshot` | A read-only view pinned to one `CommitId` and protected by the active-snapshot horizon. |
 | `Transaction` | A private mutable overlay over a parent snapshot, plus versions it has constructed but not published. |
 | `Install` | Apply a normalized diff set to the current targets and prepend the corresponding row-version nodes. |

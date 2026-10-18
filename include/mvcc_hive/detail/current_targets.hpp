@@ -39,23 +39,29 @@ public:
 
     // Writer-only repair path. The authoritative row heads supply every
     // entry, including rows whose cache entry was damaged.
-    void rebuild(
-        const RowIndex& rows, CommitId head_commit) {
-        values_.assign(rows.row_count(), no_target);
-        for (VirtualId id = 0; id < values_.size(); ++id) {
-            RowNodeId node_id = rows.newest(id);
-            while (node_id != no_row_node) {
-                auto node = rows.node_at(node_id);
-                if (!node) {
-                    break;
-                }
-                if (node->get().commit_id <= head_commit) {
-                    values_[id] = node->get().target;
-                    break;
-                }
-                node_id = node->get().previous;
+    [[nodiscard]] std::vector<TargetId> prepare_rebuild(
+        const RowIndex& rows, CommitId checkout) const {
+        std::vector<TargetId> values(rows.row_count(), no_target);
+        for (VirtualId id = 0; id < values.size(); ++id) {
+            const RowNodeId node_id =
+                rows.visible_node(id, checkout);
+            if (node_id == no_row_node) {
+                continue;
+            }
+            auto node = rows.node_at(node_id);
+            if (node) {
+                values[id] = node->get().target;
             }
         }
+        return values;
+    }
+
+    void apply_rebuild(std::vector<TargetId>&& values) noexcept {
+        values_.swap(values);
+    }
+
+    void rebuild(const RowIndex& rows, CommitId checkout) {
+        apply_rebuild(prepare_rebuild(rows, checkout));
     }
 
 private:

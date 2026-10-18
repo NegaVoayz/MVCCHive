@@ -86,8 +86,8 @@ void clear_history();
 
 - retains commit `c` and later commits in the commit log;
 - drops older commit metadata and diff records;
-- computes the row horizon as the oldest active snapshot commit, or the
-  current head when no snapshot is active;
+- computes the row horizon from the requested retention boundary and the
+  oldest active snapshot, when one exists;
 - for each virtual ID, keeps the newest node at or below that horizon and all
   younger nodes, dropping older nodes;
 - returns dropped row nodes to the row-node arena and releases empty chunks;
@@ -128,6 +128,17 @@ Removing the hive's generation reference is safe while snapshot readers are
 active because each guard owns the generation it reads. The retired
 generation, including every remaining payload, is destroyed when its last
 snapshot handle is released. No caller-side quiescence is required.
+
+A commit from an older checkout first discards the redo tail. Its future row
+nodes are detached from the current row heads but not released immediately:
+they and their target anchors remain quarantined until no snapshot can still
+be traversing them. The quarantine is reclaimed on a later writer operation
+once the snapshot registry is empty. An active snapshot above the checkout
+makes the discard fail before any row head changes.
+
+`prune_before(c)` requires `c` to be at or below the current checkout, because
+the checkout must remain addressable. `clear_history()` discards the redo tail
+first and keeps the checkout as its baseline.
 
 `prune_before` and `clear_history` end with the same explicit reclamation
 pass. A block still referenced by a retained row node or a live snapshot is

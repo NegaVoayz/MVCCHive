@@ -82,10 +82,21 @@
 - Swap changes only current targets and row nodes; it constructs no version.
 - Same-commit coalescing produces one diff for multiple edits to one ID.
 - Transaction rollback destroys only transaction-created versions.
+- Undo/redo round-trip tests verify that `head()` follows the checkout while
+  `snapshot(id)` can still inspect the retained redo tail.
+- A replace after undo publishes a new commit at the checkout's next ID,
+  removes the old future diffs, and makes `redo()` return false.
+- An empty commit after undo preserves the redo tail.
+- An active snapshot above the checkout rejects a tail-discarding commit before
+  any row head changes; releasing that snapshot allows a later commit to
+  proceed.
+- A snapshot at or below the checkout remains valid and readable after a
+  tail-discarding commit.
+- `prune_before` refuses a first-retained commit above the checkout.
 - Transaction `at`/`find` see the transaction's own insert, replace, erase,
   and swap results; untouched IDs resolve through the fixed parent snapshot.
 - An overlay-hit `at` performs no row-chain walk and no diff-log access;
-  instrumentation verifies a head-bound parent hit touches one row node.
+  instrumentation verifies a tip-checkout parent hit touches one row node.
 - An old-parent transaction walks only the requested row's changes after its
   parent commit, not unrelated rows.
 - `at` throws `std::out_of_range` for erased or missing rows, while `find`
@@ -101,7 +112,7 @@
   prepared nodes to the arena.
 - A deliberate `current_targets` corruption is repaired by
   `rebuild_current_targets()`, and the rebuilt table equals a full scan of the
-  authoritative row heads at `head_commit_`.
+  authoritative row heads at the checkout.
 - A fault-injection hook at the publication barrier proves that the publish
   phase performs no allocation and that a failure before the first row-head
   store is recoverable; a failure after the barrier is a fatal contract
@@ -151,6 +162,8 @@
 - Row-node chunk tests verify that a chunk is not released while any snapshot
   can traverse a node in it, and that an empty chunk is released and its index
   reused only after the horizon passes.
+- Blocked-vector truncation tests verify trailing-block release and safe reuse
+  of a partially retained block.
 - Row-lock tests cover same-row serialization, disjoint-row progress,
   canonical lock ordering for `swap`, rollback release, and stale-row abort.
 - A visitor test holds an old snapshot while another transaction edits the same

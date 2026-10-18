@@ -35,6 +35,17 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool has_above(CommitId commit_id) const noexcept {
+        std::lock_guard lock{mutex_};
+        return active_commits_.upper_bound(commit_id) !=
+               active_commits_.end();
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        std::lock_guard lock{mutex_};
+        return active_commits_.empty();
+    }
+
 private:
     mutable std::mutex mutex_;
     std::multiset<CommitId> active_commits_;

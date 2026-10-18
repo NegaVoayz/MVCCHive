@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -234,6 +235,8 @@ public:
             std::vector<TargetId> final_targets;
             diffs.reserve(overlay_.touched().size());
             final_targets.reserve(overlay_.touched().size());
+            const CommitId parent_commit = parent_.commit_id();
+            const CommitId next_commit = parent_commit + 1;
 
             for (const VirtualId id : overlay_.touched()) {
                 TargetId current = detail::no_target;
@@ -244,7 +247,7 @@ public:
                 }
 
                 diffs.push_back(detail::DiffRecord{
-                    .commit_id = owner_.commits_.head_commit() + 1,
+                    .commit_id = next_commit,
                     .virtual_id = id,
                     .previous_target = previous,
                     .current_target = current,
@@ -259,15 +262,20 @@ public:
                 return parent_;
             }
 
-            const CommitId next_commit =
-                owner_.commits_.head_commit() + 1;
+            const std::size_t diff_count = diffs.size();
             owner_.state_->store.reserve_reclamation(
                 created_targets_.size() + 1);
 
             std::unique_lock history_lock{owner_.history_mutex_};
+            if (owner_.commits_.tip_commit() != parent_commit &&
+                owner_.snapshots_->has_above(parent_commit)) {
+                throw std::logic_error(
+                    "cannot discard future commits while a snapshot pins them");
+            }
+
             detail::CommitBuilder builder{
                 next_commit,
-                parent_.commit_id(),
+                parent_commit,
                 owner_.state_->rows,
                 owner_.commits_,
                 owner_.current_targets_,
@@ -275,7 +283,14 @@ public:
             };
             builder.prepare();
 
+            auto truncation = owner_.prepare_truncation(
+                parent_commit, 1, diff_count);
             Snapshot result = owner_.make_snapshot(next_commit);
+
+            owner_.apply_truncation(std::move(truncation));
+            builder.publish();
+            owner_.checkout_commit_ = next_commit;
+            history_lock.unlock();
 
             std::vector<TargetId> transferred;
             std::vector<TargetId> acquired;
@@ -291,9 +306,6 @@ public:
                     acquired.push_back(target);
                 }
             }
-
-            builder.publish();
-            history_lock.unlock();
 
             for (const TargetId target : acquired) {
                 owner_.state_->store.acquire_view(target);
@@ -401,13 +413,13 @@ public:
 
     [[nodiscard]] Snapshot head() const {
         std::shared_lock lock{history_mutex_};
-        return make_snapshot(commits_.head_commit());
+        return make_snapshot(checkout_commit_);
     }
 
     [[nodiscard]] std::optional<Snapshot> snapshot(
         CommitId id) const {
         std::shared_lock lock{history_mutex_};
-        if (id > commits_.head_commit()) {
+        if (id > commits_.tip_commit()) {
             return std::nullopt;
         }
         if (!commits_.contains_commit(id)) {
@@ -418,6 +430,7 @@ public:
 
     [[nodiscard]] Transaction begin_transaction() {
         std::unique_lock writer_lock{writer_mutex_};
+        reap_deferred_if_idle();
         Snapshot parent = head();
         return Transaction{*this, std::move(writer_lock),
                            std::move(parent)};
@@ -425,9 +438,10 @@ public:
 
     [[nodiscard]] Transaction begin_transaction(CommitId id) {
         std::unique_lock writer_lock{writer_mutex_};
-        if (id != commits_.head_commit()) {
+        reap_deferred_if_idle();
+        if (id != checkout_commit_) {
             throw std::logic_error(
-                "writable transactions must start at the head");
+                "writable transactions must start at the current checkout");
         }
         auto parent = snapshot(id);
         if (!parent) {
@@ -435,6 +449,66 @@ public:
         }
         return Transaction{*this, std::move(writer_lock),
                            std::move(*parent)};
+    }
+
+    // Moves the checkout to the parent of the current commit while retaining
+    // the newer commits for redo.
+    bool undo() {
+        std::unique_lock writer_lock{writer_mutex_};
+        std::unique_lock history_lock{history_mutex_};
+        reap_deferred_if_idle();
+
+        if (checkout_commit_ == detail::no_commit) {
+            return false;
+        }
+        const auto index = commits_.commit_index(checkout_commit_);
+        if (!index) {
+            return false;
+        }
+        const CommitId parent = commits_.commit(*index).parent;
+        if (parent != detail::no_commit &&
+            !commits_.contains_commit(parent)) {
+            return false;
+        }
+
+        auto cache = current_targets_.prepare_rebuild(
+            state_->rows, parent);
+        current_targets_.apply_rebuild(std::move(cache));
+        checkout_commit_ = parent;
+        return true;
+    }
+
+    // Moves the checkout to the next retained commit. A new commit after undo
+    // discards the redo tail, so this returns false unless the tail is intact.
+    bool redo() {
+        std::unique_lock writer_lock{writer_mutex_};
+        std::unique_lock history_lock{history_mutex_};
+        reap_deferred_if_idle();
+
+        CommitId next = detail::no_commit;
+        if (checkout_commit_ == detail::no_commit) {
+            next = commits_.first_commit_id();
+            if (next == detail::no_commit) {
+                return false;
+            }
+        } else {
+            if (checkout_commit_ ==
+                std::numeric_limits<CommitId>::max()) {
+                return false;
+            }
+            next = checkout_commit_ + 1;
+        }
+
+        const auto index = commits_.commit_index(next);
+        if (!index || commits_.commit(*index).parent != checkout_commit_) {
+            return false;
+        }
+
+        auto cache = current_targets_.prepare_rebuild(
+            state_->rows, next);
+        current_targets_.apply_rebuild(std::move(cache));
+        checkout_commit_ = next;
+        return true;
     }
 
     [[nodiscard]] std::optional<Diff> diff(
@@ -471,14 +545,14 @@ public:
     void prune_before(CommitId first_retained) {
         std::unique_lock writer_lock{writer_mutex_};
         std::unique_lock history_lock{history_mutex_};
+        reap_deferred_if_idle();
 
-        const CommitId head = commits_.head_commit();
-        if (head == detail::no_commit) {
+        if (commits_.tip_commit() == detail::no_commit) {
             return;
         }
-        if (first_retained > head) {
+        if (first_retained > checkout_commit_) {
             throw std::out_of_range(
-                "first retained commit is beyond the head");
+                "first retained commit is beyond the checkout");
         }
 
         const CommitId first =
@@ -499,19 +573,24 @@ public:
         commits_.apply_prune(std::move(commit_plan));
         state_->rows.apply_prune(row_plan);
         release_targets(row_plan.released_targets());
-        current_targets_.rebuild(state_->rows, head);
+        current_targets_.rebuild(state_->rows, checkout_commit_);
     }
 
     void clear_history() {
         std::unique_lock writer_lock{writer_mutex_};
         std::unique_lock history_lock{history_mutex_};
+        reap_deferred_if_idle();
 
-        const CommitId head = commits_.head_commit();
-        if (head == detail::no_commit) {
+        if (commits_.tip_commit() == detail::no_commit) {
             return;
         }
 
-        auto commit_plan = commits_.prepare_clear_history();
+        const CommitId checkout = checkout_commit_;
+        auto truncation = prepare_truncation(checkout, 0, 0);
+        detail::PrunedCommitState commit_plan;
+        if (checkout != detail::no_commit) {
+            commit_plan = commits_.prepare_clear_history(checkout);
+        }
 
         std::optional<CommitId> oldest_snapshot;
         CommitId snapshot_id = detail::no_commit;
@@ -521,13 +600,16 @@ public:
 
         current_targets_.ensure_size(state_->rows.row_count());
         auto row_plan =
-            state_->rows.prepare_prune(head, oldest_snapshot);
+            state_->rows.prepare_prune(checkout, oldest_snapshot);
+        auto cache = current_targets_.prepare_rebuild(
+            state_->rows, checkout);
         owner_store_reserve(row_plan.released_targets().size());
 
+        apply_truncation(std::move(truncation));
         commits_.apply_prune(std::move(commit_plan));
         state_->rows.apply_prune(row_plan);
         release_targets(row_plan.released_targets());
-        current_targets_.rebuild(state_->rows, head);
+        current_targets_.apply_rebuild(std::move(cache));
     }
 
     void clear() {
@@ -539,14 +621,80 @@ public:
         auto fresh_snapshots =
             std::make_shared<detail::SnapshotRegistry>();
 
+        deferred_truncations_.clear();
         commits_.clear();
         snapshots_ = std::move(fresh_snapshots);
         state_ = std::move(fresh_state);
         current_targets_.clear();
         next_virtual_id_ = 0;
+        checkout_commit_ = detail::no_commit;
     }
 
 private:
+    struct DeferredTruncation {
+        std::vector<detail::RowNodeId> nodes;
+        std::vector<TargetId> targets;
+    };
+
+    struct PreparedTruncation {
+        bool active = false;
+        detail::TruncatedCommitState commits;
+        detail::RowIndex::TruncatePlan rows;
+        std::vector<TargetId> current_targets;
+    };
+
+    [[nodiscard]] PreparedTruncation prepare_truncation(
+        CommitId checkout,
+        std::size_t additional_commits,
+        std::size_t additional_diffs) {
+        PreparedTruncation prepared;
+        if (commits_.tip_commit() == checkout) {
+            return prepared;
+        }
+        if (snapshots_->has_above(checkout)) {
+            throw std::logic_error(
+                "cannot discard future commits while a snapshot pins them");
+        }
+
+        prepared.commits = commits_.prepare_truncate_after(
+            checkout, additional_commits, additional_diffs);
+        prepared.rows = state_->rows.prepare_truncate(checkout);
+        prepared.current_targets = current_targets_.prepare_rebuild(
+            state_->rows, checkout);
+        deferred_truncations_.reserve(
+            deferred_truncations_.size() + 1);
+        prepared.active = true;
+        return prepared;
+    }
+
+    void apply_truncation(PreparedTruncation&& prepared) noexcept {
+        if (!prepared.active) {
+            return;
+        }
+
+        commits_.apply_truncate(std::move(prepared.commits));
+        state_->rows.apply_truncate(prepared.rows);
+        current_targets_.apply_rebuild(
+            std::move(prepared.current_targets));
+        deferred_truncations_.push_back(DeferredTruncation{
+            .nodes = std::move(prepared.rows.released_nodes()),
+            .targets = std::move(prepared.rows.released_targets()),
+        });
+    }
+
+    void reap_deferred_if_idle() {
+        if (deferred_truncations_.empty() || !snapshots_->empty()) {
+            return;
+        }
+        for (DeferredTruncation& deferred : deferred_truncations_) {
+            for (const detail::RowNodeId node : deferred.nodes) {
+                state_->rows.release_node(node);
+            }
+            release_targets(deferred.targets);
+        }
+        deferred_truncations_.clear();
+    }
+
     [[nodiscard]] static Diff public_diff(
         const detail::DiffRecord& record) noexcept {
         assert(record.previous_target != detail::no_target ||
@@ -588,6 +736,8 @@ private:
     detail::CommitStore commits_;
     detail::CurrentTargetCache current_targets_;
     VirtualId next_virtual_id_ = 0;
+    CommitId checkout_commit_ = detail::no_commit;
+    std::vector<DeferredTruncation> deferred_truncations_;
 
     mutable std::mutex writer_mutex_;
     mutable std::shared_mutex history_mutex_;

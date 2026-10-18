@@ -76,13 +76,13 @@ The publication sequence is:
    retirement slot.
 4. Allocate every row-version node and record the old row heads in the
    rollback journal.
-5. Validate each `previous_target` against the authoritative row head. Repair
-   a stale cache entry from the head; reject the commit if the head's visible
-   target does not match the diff.
+5. Validate each `previous_target` against the checkout-visible row chain.
+   Repair a stale cache entry from the row head; reject the commit if the
+   checkout's visible target does not match the diff.
 6. Append the diff records and commit record into the reserved log slots.
 7. Publish each new row head with a release store.
 8. Update each touched `current_targets` entry.
-9. Publish the new head commit with a release store.
+9. Publish the new retained tip with a release store.
 10. Transfer staged target anchors into the installed row nodes and release
     the transaction's temporary anchors.
 
@@ -95,3 +95,24 @@ visible to a snapshot at the old head because their commit ID is greater than
 that snapshot's viewpoint. A new snapshot is not published until step 9.
 Because no throwing operation occurs between steps 7 and 8, an exception
 cannot leave the authoritative row head and the derived cache out of sync.
+
+### 10.7 Undo, redo, and checkout continuation
+
+`undo()` and `redo()` move the checkout without changing row chains or commit
+records. They rebuild `current_targets` for the selected commit and leave the
+redo tail available.
+
+When a non-empty transaction commits from an older checkout:
+
+1. Normalize and validate its diffs against the checkout.
+2. Allocate and prepare its new row nodes against the checkout-visible chain.
+3. Reserve commit/diff log capacity for the retained prefix plus the new
+   commit.
+4. Detach row nodes newer than the checkout and truncate the commit and diff
+   logs in place.
+5. Publish the new row nodes, commit record, and checkout.
+
+The future commit-ID range is reused because those commits no longer exist in
+the retained timeline. An active snapshot above the checkout blocks step 4
+before any mutation. A failed prepare leaves the redo tail and checkout
+unchanged. An empty commit does not trigger truncation.

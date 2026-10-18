@@ -78,9 +78,46 @@ void check_move_and_swap() {
     REQUIRE(moved.capacity() == 0);
 }
 
+void check_truncate() {
+    using Log = BlockedVector<int, 8>;
+
+    Log log;
+    for (int value = 0; value < 20; ++value) {
+        log.push_back(value);
+    }
+    REQUIRE(log.size() == 20);
+    REQUIRE(log.capacity() == 24);
+
+    log.truncate(10);
+    REQUIRE(log.size() == 10);
+    REQUIRE(log.capacity() == 16);
+    for (int value = 0; value < 10; ++value) {
+        REQUIRE(log[value] == value);
+    }
+
+    log.append_prepared(99);
+    REQUIRE(log.size() == 11);
+    REQUIRE(log[10] == 99);
+
+    log.truncate(8, 9);
+    REQUIRE(log.size() == 8);
+    REQUIRE(log.capacity() == 16);
+    log.append_prepared(100);
+    REQUIRE(log.size() == 9);
+    REQUIRE(log[8] == 100);
+
+    log.truncate(0);
+    REQUIRE(log.empty());
+    REQUIRE(log.capacity() == 0);
+    log.push_back(7);
+    REQUIRE(log.size() == 1);
+    REQUIRE(log[0] == 7);
+}
+
 }  // namespace
 
 int main() {
     check_block_growth_and_values();
     check_move_and_swap();
+    check_truncate();
 }

@@ -39,7 +39,8 @@ slot swapping disappear entirely.
   may exist only when `T` is nothrow movable, and history still never moves a
   stored version.
 - Virtual IDs are monotonic and are not recycled.
-- Undo/redo are snapshot navigation, not inverse payload operations.
+- Undo/redo move the linear checkout, not inverse payload operations. A redo
+  tail is retained until a new commit is published from the checkout.
 - Historical reads are first-class immutable snapshots.
 - The internal diff log is a row-target change log:
   `commit_id, virtual_id, previous_target, current_target`. Public history
@@ -63,6 +64,9 @@ slot swapping disappear entirely.
 - Commit installation has an explicit prepare/publish boundary. The prepared
   nodes are allocated before the boundary; publication is `noexcept` and
   performs no allocation or construction.
+- A new commit from an older checkout prepares against that checkout, then
+  truncates the redo tail in place before publication. A failed prepare leaves
+  the tail intact.
 - `current_targets` is a derived writer-only cache. The row head is the
   authoritative current mapping, and the cache can be rebuilt after a fault.
 - The hive and its snapshot guards share ownership of a generation containing

@@ -67,7 +67,8 @@ public:
 
         for (const DiffRecord& diff : diffs_) {
             const RowNodeId old_head =
-                rows_.get().newest(diff.virtual_id);
+                rows_.get().visible_node(
+                    diff.virtual_id, parent_);
             const RowNodeId new_node = rows_.get().allocate_node(
                 RowVersionNode{
                     .commit_id = commit_id_,
@@ -103,7 +104,7 @@ public:
                 row.diff.virtual_id,
                 row.diff.current_target);
         }
-        commits_.get().publish_head(commit_id_);
+        commits_.get().publish_tip(commit_id_);
         published_ = true;
     }
 

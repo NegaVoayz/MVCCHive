@@ -109,7 +109,7 @@ void check_commit_publication_and_historical_reads() {
     REQUIRE(fixture.rows.live_node_count() == 1);
     REQUIRE(fixture.commits.commit_count() == 1);
     REQUIRE(fixture.commits.diff_count() == 1);
-    REQUIRE(fixture.commits.head_commit() == 1);
+    REQUIRE(fixture.commits.tip_commit() == 1);
     REQUIRE(fixture.current.get(0) == first);
     REQUIRE(fixture.rows.visible_target(0, 1) == first);
 
@@ -185,7 +185,7 @@ void check_prepare_failure_rolls_back_nodes() {
     REQUIRE(fixture.rows.live_node_count() == nodes_before);
     REQUIRE(fixture.commits.commit_count() == commits_before);
     REQUIRE(fixture.commits.diff_count() == diffs_before);
-    REQUIRE(fixture.commits.head_commit() == 1);
+    REQUIRE(fixture.commits.tip_commit() == 1);
 }
 
 void check_current_cache_rebuild() {
@@ -197,7 +197,7 @@ void check_current_cache_rebuild() {
 
     fixture.current.set(0, first);
     REQUIRE(fixture.current.get(0) == first);
-    fixture.current.rebuild(fixture.rows, fixture.commits.head_commit());
+    fixture.current.rebuild(fixture.rows, fixture.commits.tip_commit());
     REQUIRE(fixture.current.size() == 1);
     REQUIRE(fixture.current.get(0) == second);
 }
@@ -223,7 +223,7 @@ void check_commit_log_uses_preallocated_blocks() {
     for (std::size_t i = 1; i <= block_capacity; ++i) {
         store.reserve(1, 1);
         store.append_prepared(i, i - 1, std::span{&record, 1});
-        store.publish_head(i);
+        store.publish_tip(i);
         REQUIRE(store.commit_capacity() == initial_commit_capacity);
         REQUIRE(store.diff_capacity() == initial_diff_capacity);
     }
@@ -231,6 +231,36 @@ void check_commit_log_uses_preallocated_blocks() {
     store.reserve(1, 1);
     REQUIRE(store.commit_capacity() == block_capacity * 2);
     REQUIRE(store.diff_capacity() == block_capacity * 2);
+}
+
+void check_truncate_keeps_room_for_replacement() {
+    using Commits =
+        mvcc_hive::detail::BlockedVector<
+            mvcc_hive::detail::CommitRecord>;
+    constexpr std::size_t block_capacity =
+        Commits::block_capacity;
+
+    CommitStore store;
+    store.reserve(block_capacity + 2, block_capacity + 2);
+    const DiffRecord record = diff(1, 0, no_target, 0);
+    for (CommitId id = 1; id <= block_capacity + 2; ++id) {
+        store.append_prepared(id, id - 1, std::span{&record, 1});
+        store.publish_tip(id);
+    }
+
+    auto truncation = store.prepare_truncate_after(
+        block_capacity, 1, 1);
+    store.apply_truncate(std::move(truncation));
+    REQUIRE(store.commit_count() == block_capacity);
+    REQUIRE(store.diff_count() == block_capacity);
+
+    store.append_prepared(
+        block_capacity + 1,
+        block_capacity,
+        std::span{&record, 1});
+    store.publish_tip(block_capacity + 1);
+    REQUIRE(store.commit_count() == block_capacity + 1);
+    REQUIRE(store.diff_count() == block_capacity + 1);
 }
 
 void check_row_pruning_keeps_snapshot_tail() {
@@ -318,6 +348,7 @@ int main() {
     check_prepare_failure_rolls_back_nodes();
     check_current_cache_rebuild();
     check_commit_log_uses_preallocated_blocks();
+    check_truncate_keeps_room_for_replacement();
     check_row_pruning_keeps_snapshot_tail();
     check_row_chunk_directory_auto_shrinks();
 }

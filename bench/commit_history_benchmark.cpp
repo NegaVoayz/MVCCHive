@@ -42,6 +42,20 @@ void run(std::size_t history_size, std::size_t sample_count) {
     }
     const auto sample_end = Clock::now();
 
+    const auto undo_start = Clock::now();
+    for (std::size_t sample = 0; sample < sample_count; ++sample) {
+        if (!hive.undo()) {
+            std::cerr << "undo unexpectedly exhausted history\n";
+            return;
+        }
+        auto tx = hive.begin_transaction();
+        tx.replace(
+            id,
+            static_cast<int>(history_size + sample_count + sample + 1));
+        static_cast<void>(tx.commit());
+    }
+    const auto undo_end = Clock::now();
+
     std::cout << "history=" << history_size
               << " build_ms="
               << std::chrono::duration<double, std::milli>(
@@ -49,6 +63,8 @@ void run(std::size_t history_size, std::size_t sample_count) {
                      .count()
               << " commit_us="
               << microseconds(sample_end - sample_start, sample_count)
+              << " undo_commit_us="
+              << microseconds(undo_end - undo_start, sample_count)
               << '\n';
 }
 

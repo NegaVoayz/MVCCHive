@@ -34,7 +34,7 @@ public:
     MVCCHive();
     ~MVCCHive();
 
-    Snapshot head() const;
+    Snapshot head() const;  // current checkout, not necessarily the tip
     std::optional<Snapshot> snapshot(CommitId id) const;
 
     Transaction begin_transaction();
@@ -42,6 +42,9 @@ public:
 
     std::optional<Diff> diff(std::size_t index) const;
     std::vector<Diff> diffs(CommitId id) const;
+
+    bool undo();
+    bool redo();
 
     void prune_before(CommitId first_retained);
     void clear_history();
@@ -85,7 +88,7 @@ private:
     // Guards hold weak references; this is the sole strong registry owner.
     std::shared_ptr<SnapshotRegistry> snapshots_;
     std::vector<TargetId> current_targets_;  // derived writer-only cache
-    std::atomic<CommitId> head_commit_;
+    CommitId checkout_commit_;
     mutable std::mutex writer_mutex_;
     mutable std::shared_mutex history_mutex_;
     RowLockManager row_locks_;
@@ -110,6 +113,10 @@ storage during hive teardown or `clear()`.
 History inspection returns values rather than references into mutable log
 storage. A concurrent writer can therefore append or compact the log without
 invalidating a caller's range or exposing an internal `span`.
+
+`head()` returns the current checkout. `snapshot(id)` can inspect any retained
+commit, including the redo tail. A writable transaction must begin at the
+checkout; it cannot begin directly at an arbitrary future or historical commit.
 
 ### 9.1 Transaction API
 
@@ -148,11 +155,11 @@ private:
 };
 ```
 
-The transaction is the only write surface. It binds to the head snapshot when
-created. `commit()` publishes an atomic commit; `rollback()` destroys every
-version constructed only by that transaction. A transaction holds non-owning
-store and row-index references and must be completed or destroyed before its
-hive is destroyed.
+The transaction is the only write surface. It binds to the current checkout
+snapshot when created. `commit()` publishes an atomic commit; `rollback()`
+destroys every version constructed only by that transaction. A transaction
+holds non-owning store and row-index references and must be completed or
+destroyed before its hive is destroyed.
 
 `replace` is the transaction spelling of the Update operation. It constructs
 a completely new version and prepends a row-version node. It never assigns
@@ -244,7 +251,7 @@ row's chain. It never scans unrelated rows, the diff log, or the writer-only
 | --- | --- | --- |
 | Overlay hit (insert, replace, erase, swap) | `O(1)` expected hash lookup plus `O(1)` target resolution | `O(1)` |
 | Overlay hit that is erased | `O(1)` expected; throws or returns `nullopt` immediately | `O(1)` |
-| Parent hit, head-bound transaction | `O(1)` expected: row head, one node-chunk load, target resolution | `O(1)` |
+| Parent hit, checkout at retained tip | `O(1)` expected: row head, one node-chunk load, target resolution | `O(1)` |
 | Parent hit, old parent snapshot | `O(c)`, where `c` is the number of that row's changes after the parent commit | `O(1)` |
 | Parent miss | same as parent hit, then absent | `O(1)` |
 | Overlay storage for `k` touched IDs | insert/update `O(1)` expected; commit normalization sorts `k` keys in `O(k log k)` | `O(k)` |
@@ -274,6 +281,32 @@ There is no per-read memoization cache. Repeated `at` calls on the same
 old-parent row pay the row-chain walk again. Adding a cache would use
 `O(distinct reads)` space and require invalidation on every write; that is a
 later optimization only if profiling shows it matters.
+
+#### 9.1.2 Checkout and redo
+
+The hive keeps three positions distinct:
+
+- **checkout**: the commit used by `head()` and writable transactions;
+- **retained tip**: the newest commit still present in the commit log;
+- **redo tail**: retained commits newer than the checkout.
+
+`undo()` selects the checkout's parent; `redo()` selects the next retained
+child. Both retain the tail and rebuild the writer-only current-target cache.
+They return `false` when no move is possible.
+
+A non-empty commit prepared from an older checkout discards the redo tail. The
+new commit is prepared before the discard, so a failed prepare leaves the tail
+intact. The discard truncates the commit and diff logs in place, detaches row
+nodes newer than the checkout, and publishes the new commit as
+`checkout + 1`. If the commit is empty, `commit()` returns the parent snapshot
+and leaves redo available.
+
+An active snapshot pinned above the checkout makes the discard fail with
+`std::logic_error` before any mutation. Snapshots at or below the checkout
+remain valid; detached row nodes and target anchors are reclaimed once no
+snapshot can traverse them. Virtual IDs remain monotonically allocated and are
+not rewound by undo. A `Diff` copied from a discarded tail remains an ordinary
+value, but its commit/virtual pair no longer identifies the same timeline entry.
 
 ### 9.2 Snapshot API
 
@@ -329,17 +362,18 @@ logical view, but cannot inspect how the snapshot is represented.
 
 ### 9.3 Time travel
 
-`hive.snapshot(commit_id)` is the primitive operation. Old-style `undo()` and
-`redo()` become navigation between snapshots, not payload mutations. If
-convenience methods are retained, they should be expressed as:
+`hive.snapshot(commit_id)` is a read-only view of a retained commit.
+`undo()` and `redo()` move the writable checkout along the retained linear
+history:
 
 ```text
-previous(snapshot) -> snapshot at the parent commit
-next(snapshot)     -> snapshot at the next linear child, if any
+undo() -> checkout = parent(checkout), tail retained
+redo() -> checkout = next retained child, if any
 ```
 
-The important semantic change is that viewing an old commit does not mutate
-the hive's current state.
+Viewing an old commit does not mutate state. A new non-empty commit from an
+older checkout discards the redo tail and starts a fresh continuation from that
+checkout; an empty commit leaves the tail intact.
 
 ### 9.4 Visibility boundary
 

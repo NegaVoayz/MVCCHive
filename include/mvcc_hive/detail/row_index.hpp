@@ -42,6 +42,37 @@ public:
         std::vector<TargetId> released_targets_;
     };
 
+    class TruncatePlan {
+    public:
+        TruncatePlan() = default;
+        TruncatePlan(const TruncatePlan&) = delete;
+        TruncatePlan& operator=(const TruncatePlan&) = delete;
+        TruncatePlan(TruncatePlan&&) noexcept = default;
+        TruncatePlan& operator=(TruncatePlan&&) noexcept = default;
+
+        [[nodiscard]] std::vector<RowNodeId>& released_nodes()
+            noexcept {
+            return released_nodes_;
+        }
+
+        [[nodiscard]] std::vector<TargetId>& released_targets()
+            noexcept {
+            return released_targets_;
+        }
+
+    private:
+        friend class RowIndex;
+
+        struct HeadLink {
+            VirtualId id;
+            RowNodeId new_head;
+        };
+
+        std::vector<HeadLink> heads_;
+        std::vector<RowNodeId> released_nodes_;
+        std::vector<TargetId> released_targets_;
+    };
+
     static constexpr std::size_t row_page_capacity = 256;
     static_assert(std::has_single_bit(row_page_capacity));
 
@@ -91,25 +122,32 @@ public:
 
     [[nodiscard]] TargetId visible_target(
         VirtualId id, CommitId snapshot_commit) const noexcept {
-        RowNodeId node_id = newest(id);
-        const RowVersionNode* node = nullptr;
+        const RowNodeId node_id =
+            visible_node(id, snapshot_commit);
+        if (node_id == no_row_node) {
+            return no_target;
+        }
+        auto node = node_at(node_id);
+        if (!node) {
+            return no_target;
+        }
+        return node->get().target;
+    }
 
+    [[nodiscard]] RowNodeId visible_node(
+        VirtualId id, CommitId snapshot_commit) const noexcept {
+        RowNodeId node_id = newest(id);
         while (node_id != no_row_node) {
             auto current = node_at(node_id);
             if (!current) {
-                return no_target;
+                return no_row_node;
             }
-            node = &current->get();
-            if (node->commit_id <= snapshot_commit) {
-                break;
+            if (current->get().commit_id <= snapshot_commit) {
+                return node_id;
             }
-            node_id = node->previous;
+            node_id = current->get().previous;
         }
-
-        if (node_id == no_row_node || node == nullptr) {
-            return no_target;
-        }
-        return node->target;
+        return no_row_node;
     }
 
     [[nodiscard]] RowNodeId allocate_node(
@@ -200,6 +238,66 @@ public:
         }
         for (const RowNodeId node_id : plan.release_nodes_) {
             release_node_locked(node_id);
+        }
+    }
+
+    // Writer-only planning pass. Future nodes are detached from their row
+    // heads but are not released here; the caller decides when the retired
+    // chain is safe to reclaim.
+    [[nodiscard]] TruncatePlan prepare_truncate(
+        CommitId retain_through) {
+        TruncatePlan plan;
+        const std::size_t rows = row_count();
+
+        for (VirtualId id = 0; id < rows; ++id) {
+            const RowNodeId head = newest(id);
+            if (head == no_row_node) {
+                continue;
+            }
+
+            RowNodeId tail = no_row_node;
+            for (RowNodeId cursor = head;
+                 cursor != no_row_node;) {
+                auto node = node_at(cursor);
+                if (!node) {
+                    break;
+                }
+                if (node->get().commit_id <= retain_through) {
+                    tail = cursor;
+                    break;
+                }
+                cursor = node->get().previous;
+            }
+
+            if (tail == head) {
+                continue;
+            }
+
+            plan.heads_.push_back(
+                TruncatePlan::HeadLink{
+                    .id = id,
+                    .new_head = tail,
+                });
+            for (RowNodeId cursor = head;
+                 cursor != tail;) {
+                auto node = node_at(cursor);
+                if (!node) {
+                    break;
+                }
+                const RowVersionNode& value = node->get();
+                if (value.target != no_target) {
+                    plan.released_targets_.push_back(value.target);
+                }
+                plan.released_nodes_.push_back(cursor);
+                cursor = value.previous;
+            }
+        }
+        return plan;
+    }
+
+    void apply_truncate(const TruncatePlan& plan) noexcept {
+        for (const TruncatePlan::HeadLink& link : plan.heads_) {
+            set_newest(link.id, link.new_head);
         }
     }
 

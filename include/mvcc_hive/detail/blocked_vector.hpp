@@ -115,6 +115,34 @@ public:
         BlockedVector{}.swap(*this);
     }
 
+    // Drops trailing values and releases whole trailing blocks. Values beyond
+    // new_size in a partially retained block are overwritten by later
+    // append_prepared() calls.
+    void truncate(
+        std::size_t new_size,
+        std::size_t capacity_floor = 0) noexcept {
+        if (new_size >= size_) {
+            return;
+        }
+        const std::size_t floor =
+            capacity_floor > new_size ? capacity_floor : new_size;
+        const std::size_t blocks_needed =
+            (new_size >> block_shift) +
+            ((new_size & block_mask) != 0 ? 1 : 0);
+        const std::size_t blocks_to_keep =
+            (floor >> block_shift) +
+            ((floor & block_mask) != 0 ? 1 : 0);
+        const std::size_t keep =
+            blocks_to_keep > blocks_needed
+                ? blocks_to_keep
+                : blocks_needed;
+        assert(blocks_.size() >= keep);
+        while (blocks_.size() > keep) {
+            blocks_.pop_back();
+        }
+        size_ = new_size;
+    }
+
 private:
     static constexpr unsigned block_shift =
         std::countr_zero(block_capacity);

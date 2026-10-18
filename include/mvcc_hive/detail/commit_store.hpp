@@ -45,6 +45,16 @@ struct PrunedCommitState {
     CommitId first_commit_id = no_commit;
 };
 
+struct TruncatedCommitState {
+    std::size_t retained_commits = 0;
+    std::size_t retained_diffs = 0;
+    std::size_t commit_capacity = 0;
+    std::size_t diff_capacity = 0;
+    CommitId first_commit_id = no_commit;
+    CommitId tip_commit = no_commit;
+    bool changed = false;
+};
+
 class CommitStore {
 public:
     CommitStore() = default;
@@ -56,6 +66,19 @@ public:
         std::size_t additional_diffs) {
         commits_.reserve(additional_commits);
         diffs_.reserve(additional_diffs);
+    }
+
+    void reserve_size(
+        std::size_t commit_target,
+        std::size_t diff_target) {
+        commits_.reserve(
+            commit_target > commits_.size()
+                ? commit_target - commits_.size()
+                : 0);
+        diffs_.reserve(
+            diff_target > diffs_.size()
+                ? diff_target - diffs_.size()
+                : 0);
     }
 
     // No allocation or user code runs here.
@@ -81,12 +104,12 @@ public:
         }
     }
 
-    void publish_head(CommitId id) noexcept {
-        head_commit_.store(id, std::memory_order_release);
+    void publish_tip(CommitId id) noexcept {
+        tip_commit_.store(id, std::memory_order_release);
     }
 
-    [[nodiscard]] CommitId head_commit() const noexcept {
-        return head_commit_.load(std::memory_order_acquire);
+    [[nodiscard]] CommitId tip_commit() const noexcept {
+        return tip_commit_.load(std::memory_order_acquire);
     }
 
     [[nodiscard]] std::size_t commit_count() const noexcept {
@@ -113,7 +136,7 @@ public:
         CommitId id) const noexcept {
         if (commits_.empty() ||
             id < first_commit_id_ ||
-            id > head_commit()) {
+            id > tip_commit()) {
             return std::nullopt;
         }
 
@@ -182,20 +205,61 @@ public:
     }
 
     // The audit log is optional metadata. Keep only a head baseline record.
-    [[nodiscard]] PrunedCommitState prepare_clear_history() const {
+    [[nodiscard]] PrunedCommitState prepare_clear_history(
+        CommitId baseline) const {
         PrunedCommitState state;
         if (commits_.empty()) {
             return state;
         }
 
-        const CommitId head = head_commit();
         state.commits.push_back(CommitRecord{
-            .id = head,
+            .id = baseline,
             .parent = no_commit,
             .first_diff = 0,
             .diff_count = 0,
         });
-        state.first_commit_id = head;
+        state.first_commit_id = baseline;
+        return state;
+    }
+
+    // Builds the retained prefix without changing visible state. Capacity for
+    // the next commit is reserved in the replacement logs.
+    [[nodiscard]] TruncatedCommitState prepare_truncate_after(
+        CommitId checkout,
+        std::size_t additional_commits,
+        std::size_t additional_diffs) {
+        TruncatedCommitState state;
+        state.tip_commit = checkout;
+        if (commits_.empty() || checkout == tip_commit()) {
+            return state;
+        }
+
+        if (checkout == no_commit) {
+            reserve_size(additional_commits, additional_diffs);
+            state.commit_capacity = additional_commits;
+            state.diff_capacity = additional_diffs;
+            state.changed = true;
+            return state;
+        }
+
+        const auto index = commit_index(checkout);
+        if (!index) {
+            throw std::out_of_range(
+                "truncate point is not a retained commit");
+        }
+
+        const CommitRecord& last = commits_[*index];
+        state.retained_commits = *index + 1;
+        state.retained_diffs = last.first_diff + last.diff_count;
+        state.commit_capacity =
+            state.retained_commits + additional_commits;
+        state.diff_capacity =
+            state.retained_diffs + additional_diffs;
+        state.first_commit_id = first_commit_id_;
+        reserve_size(
+            state.commit_capacity,
+            state.diff_capacity);
+        state.changed = true;
         return state;
     }
 
@@ -205,17 +269,31 @@ public:
         first_commit_id_ = state.first_commit_id;
     }
 
+    void apply_truncate(TruncatedCommitState&& state) noexcept {
+        if (!state.changed) {
+            return;
+        }
+        commits_.truncate(
+            state.retained_commits,
+            state.commit_capacity);
+        diffs_.truncate(
+            state.retained_diffs,
+            state.diff_capacity);
+        first_commit_id_ = state.first_commit_id;
+        tip_commit_.store(state.tip_commit, std::memory_order_release);
+    }
+
     void clear() noexcept {
         commits_.clear();
         diffs_.clear();
-        head_commit_.store(no_commit, std::memory_order_release);
+        tip_commit_.store(no_commit, std::memory_order_release);
         first_commit_id_ = no_commit;
     }
 
 private:
     BlockedVector<CommitRecord> commits_;
     BlockedVector<DiffRecord> diffs_;
-    std::atomic<CommitId> head_commit_{no_commit};
+    std::atomic<CommitId> tip_commit_{no_commit};
     CommitId first_commit_id_ = no_commit;
 };
 

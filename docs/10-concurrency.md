@@ -9,8 +9,8 @@ readers.
 
 ### 14.1 Writer exclusion
 
-- `begin_transaction`, `prune_before`, `clear_history`, and `clear` acquire an
-  exclusive writer lock.
+- `begin_transaction`, `undo`, `redo`, `prune_before`, `clear_history`, and
+  `clear` acquire an exclusive writer lock.
 - A `Transaction` owns that lock for its lifetime. It is a writer-local object
   and must not be shared between threads.
 - There is at most one active transaction and therefore at most one writer.
@@ -23,6 +23,9 @@ readers.
   writer exclusion; snapshots never access it.
 - Commit-log append and history drop also take the history lock exclusively;
   `diff` and `diffs` take it shared and copy the requested records.
+- A commit that discards a redo tail takes the history lock exclusively. It
+  first checks the snapshot registry; an active snapshot above the checkout
+  rejects the discard before any row head or log changes.
 
 This whole-transaction writer lock is the conservative v1 policy. Section 14.6
 defines the row-lock seam that replaces it when concurrent write transactions
@@ -49,8 +52,11 @@ are enabled.
 - A snapshot copied to another thread shares the same guard, generation
   ownership, and row-index reference. Copying the snapshot does not ask the
   payload store for a new view.
+- Snapshots may pin retained redo-tail commits. A new commit after undo does
+  not discard those commits while such a snapshot is active. Snapshot
+  destruction may allow a later attempt to proceed.
 
-Row heads and the head commit are published with release/acquire semantics.
+Row heads and the retained tip are published with release/acquire semantics.
 Snapshot lookup by commit ID synchronizes only while registering the horizon;
 after that, row-chain traversal and payload access are read-only.
 
@@ -144,7 +150,7 @@ For every newly constructed target, the required order is:
 5. append the diff records and commit record into pre-reserved log slots;
 6. publish each row head with a release store of its `RowNodeId`;
 7. update each touched `current_targets` entry;
-8. publish the new head commit with a release store.
+8. publish the new retained tip with a release store.
 
 Readers use the reverse acquire path. No `T` is mutated after step 2, so a
 reader that observes a published target observes its complete value. Steps
@@ -200,16 +206,16 @@ than blocking indefinitely.
 1. `begin_transaction` captures a parent snapshot but does not take the global
    writer lock for its lifetime.
 2. On the first write to an existing ID, the transaction acquires the row
-   lock and verifies that the current head still maps that ID to the target
+   lock and verifies that the current checkout still maps that ID to the target
    used by the transaction view. A mismatch aborts with a row conflict.
 3. The transaction stages versions and normalized changes while holding its
    row locks.
 4. At commit, it takes only a short publication mutex.
-5. Every touched row is revalidated against the current head. A stale cache
-   entry is rebuilt from the head. Because the row locks were held
+5. Every touched row is revalidated against the current checkout. A stale cache
+   entry is rebuilt from the row head. Because the row locks were held
    continuously, another writer cannot have changed those rows; disjoint
-   writers may have advanced the head.
-6. The transaction's diffs are rebased onto the current head and published as
+   writers may have advanced the retained tip.
+6. The transaction's diffs are rebased onto the current checkout and published as
    a new linear commit.
 7. The row locks are released after publication or abort.
 
@@ -218,10 +224,10 @@ Two transactions that touch the same row serialize on that row. The global
 publication mutex decides the commit order, not the transaction's interactive
 lifetime.
 
-The published commit record's `parent` is the current head at publication.
+The published commit record's `parent` is the current checkout at publication.
 Each internal `DiffRecord`'s `previous_target` is the value from the
 transaction's parent snapshot, which the row-lock revalidation proves still
-matches the current head for every touched row.
+matches the current checkout for every touched row.
 
 When multi-writer mode is enabled, an automatically assigned `CommitId` is
 minted under the publication mutex. An explicit-ID overload must also validate

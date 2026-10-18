@@ -129,22 +129,27 @@ struct Commit {
 };
 ```
 
-The diff log is append-only for the retained history window. Commit IDs start
-at 1; commit 0 means "before the first retained commit" where that distinction
-is needed.
+The diff log is append-only while the checkout advances. `undo()` and `redo()`
+move the checkout without changing the retained tail. A new commit from an
+older checkout truncates the redo tail in place and reuses its commit-ID range.
+Commit IDs start at 1; commit 0 means "before the first retained commit" where
+that distinction is needed.
 
 The append-only commit and diff logs use fixed-size blocked storage rather than
 a monolithic reallocating vector. The next block is prepared before a commit
 crosses its current block boundary, so retained history is never copied during
 publication.
 
-For the initial implementation the timeline is linear:
+The timeline is linear:
 
-- a transaction extends the current head;
+- a transaction extends the current checkout;
+- `undo()` selects the parent commit; `redo()` selects the next retained child;
+- a successful commit after undo discards every commit newer than the checkout;
+- an empty commit preserves the redo tail;
 - historical snapshots are read-only;
 - a new commit does not rewrite an old row-version node;
-- branching is out of scope: row-version chains encode one linear commit
-  history and would need a separate merge or fan-out representation.
+- branching and merge are out of scope: row-version chains encode one linear
+  checkout history and would need a separate branch representation.
 
 The commit record owns the diff range for that commit. A snapshot resolves
 against row-version chains filtered by the commit ID; it does not need a

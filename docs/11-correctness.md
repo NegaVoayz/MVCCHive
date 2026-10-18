@@ -7,7 +7,8 @@
 The implementation should assert or enforce all of the following:
 
 1. A `VirtualId` is never reused.
-2. A commit ID is unique and increases along the linear timeline.
+2. A commit ID is unique and increases within the retained linear timeline.
+   IDs belonging to a discarded redo tail may be reused by its replacement.
 3. Installing a commit prepends exactly its normalized row-version nodes and
    updates exactly the touched current-target entries.
 4. Every internal `DiffRecord`'s `previous_target` matches the parent snapshot
@@ -64,7 +65,7 @@ The implementation should assert or enforce all of the following:
 31. Commit IDs decrease strictly along each row-version chain from newest to
     oldest.
 32. `current_targets[vid]` equals the target of the newest row-version node at
-    or below `head_commit_` for `vid`; it is a rebuildable cache, while the row
+    or below the checkout for `vid`; it is a rebuildable cache, while the row
     head is authoritative.
 33. During normal operation, a row-version node visible at or below an active
     snapshot horizon is not reclaimed.
@@ -94,8 +95,8 @@ The implementation should assert or enforce all of the following:
     powers of two, and chunk/slot/page projection uses shifts and masks.
 44. Snapshot resolution never consults `current_targets` or the global diff
     log.
-45. A row node whose commit is newer than `head_commit_` is skipped by both
-    snapshot resolution and `rebuild_current_targets()`.
+45. A row node whose commit is newer than the active snapshot or checkout is
+    skipped by the corresponding resolution or cache rebuild.
 46. No live target equals `no_target`. The block allocator enforces
     `block_id <= max_block_index`, reserving the top block index so the
     sentinel is structurally unreachable. Public `Diff` values contain no
@@ -136,3 +137,16 @@ The implementation should assert or enforce all of the following:
 58. Commit records and diffs use power-of-two blocked storage. Crossing a
     block boundary allocates the next block during prepare; publication
     performs no allocation and never copies retained history.
+59. The checkout is either commit 0 or a retained commit not newer than the
+    retained tip. `head()` returns the checkout; `snapshot(id)` may inspect any
+    retained commit up to the tip.
+60. `undo()` moves the checkout to its retained parent; `redo()` moves it to
+    the next retained child. Neither drops retained history nor changes row
+    chains.
+61. A non-empty commit from an older checkout prepares first, then truncates
+    the redo tail in place. A failed prepare or a snapshot pinned above the
+    checkout leaves the tail and checkout unchanged.
+62. An empty commit preserves the redo tail.
+63. Future row nodes detached by checkout truncation are not released while
+    any snapshot can still traverse them. Their target anchors remain until
+    the same safe-reclamation point.

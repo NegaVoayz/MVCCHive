@@ -1,6 +1,6 @@
 # MVCCHive design
 
-Release status: version 2.0.0 covers the single-writer design. Multiwriter row
+Release status: version 2.1.0 covers the single-writer design. Multiwriter row
 locking is the intentionally deferred extension.
 
 `MVCCHive<T>` is a C++23 MVCC container. Stored values are constructed once in
@@ -43,6 +43,9 @@ hive. History is represented by per-row version chains plus a compact diff log.
   private `RowNodeId`; zero is the empty/tail sentinel.
 - `row_head[vid].newest` is authoritative. `current_targets` is a writer-only,
   rebuildable cache.
+- The checkout selects the commit used by `head()` and writable transactions.
+  `undo()`/`redo()` move it without discarding retained history; a new commit
+  from an older checkout discards the redo tail.
 - A snapshot stores a commit ID and a guard that shares ownership of the
   generation containing `RowIndex` and `VersionStore`. It does not materialize
   a projection.

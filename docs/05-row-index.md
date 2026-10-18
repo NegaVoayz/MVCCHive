@@ -135,12 +135,12 @@ writer exclusion:
 ```cpp
 // Writer-only. O(V); never called on the snapshot read path.
 void rebuild_current_targets() noexcept {
-    const CommitId head = head_commit_.load(std::memory_order_relaxed);
+    const CommitId checkout = checkout_commit_.load(std::memory_order_relaxed);
     for (VirtualId vid = 0; vid < current_targets.size(); ++vid) {
         RowNodeId id = row_head(vid).newest.load(std::memory_order_relaxed);
         while (id != no_row_node) {
             const RowVersionNode& n = node_arena_.at(id);
-            if (n.commit_id <= head) break;
+            if (n.commit_id <= checkout) break;
             id = n.previous;
         }
         current_targets[vid] =
@@ -149,9 +149,8 @@ void rebuild_current_targets() noexcept {
 }
 ```
 
-The loop skips row nodes newer than `head_commit_`, so it is also correct if a
-future fault leaves an unpublished but not-yet-recycled node at the front of a
-chain.
+The loop skips row nodes newer than the checkout, so it is also correct when a
+retained redo tail is still linked ahead of the checkout.
 
 The row heads use the same stable paged publication strategy as the block
 directory. Growing the row table publishes a page; it never moves an existing
@@ -201,8 +200,8 @@ than silently rolled back.
    preallocated rollback journal.
 5. Validate each diff against the authoritative row head, not merely
    against the cache. The head's visible target must equal
-   `diff.previous_target`. If the cache disagrees, rebuild that entry from
-   the head; in debug builds, assert that it agrees.
+   `diff.previous_target` at the checkout. If the cache disagrees, rebuild that
+   entry from the row head; in debug builds, assert that it agrees.
 
 Any exception in this phase leaves every row head unchanged. Prepared nodes
 are returned to the arena by the commit builder's destructor.
@@ -223,10 +222,10 @@ are returned to the arena by the commit builder's destructor.
    current_targets[vid] = diff.current_target
    ```
 
-4. Publish the new head commit:
+4. Publish the new retained tip commit:
 
    ```text
-   head_commit_.store(commit_id, std::memory_order_release)
+   tip_commit_.store(commit_id, std::memory_order_release)
    ```
 
 5. Give every installed row node its target anchor. A transaction-created
@@ -274,8 +273,21 @@ cannot be recycled immediately. The design avoids that cost by making the
 publication window non-throwing. A future recovery mode can add a quarantine
 for new nodes, but it is not needed for the normal exception-safety contract.
 
-Undo and redo are viewpoint changes. They do not apply inverse payload
-operations or rebuild an index.
+Undo and redo are checkout changes. They do not apply inverse payload
+operations or rebuild an index. A new commit from an older checkout:
+
+- allocates and validates its new row nodes against the checkout-visible
+  chain;
+- detaches every row node newer than the checkout and points the row head at
+  the newest checkout-visible node;
+- retains the detached nodes and their target anchors until no snapshot can
+  still be traversing them;
+- publishes the new node chain from the checkout, reusing the discarded
+  commit-ID range.
+
+A snapshot pinned to a discarded future commit prevents this discard and makes
+the commit fail before any row head changes. Snapshots at or below the
+checkout remain valid.
 
 ### 7.3 Snapshot resolution
 
@@ -320,10 +332,10 @@ The resulting complexity is:
 - snapshot acquisition: `O(1)` plus active-snapshot registration;
 - historical full scan: `O(V + total skipped row versions)`.
 
-This is deliberately not a Git-style checkout. If a workload later performs
-many full scans of the same old commit, an opt-in materialized view can cache
-the result of that scan. That cache is not required by the core model and
-should not be built speculatively.
+The checkout is a commit position, not a materialized projection. If a workload
+later performs many full scans of the same old commit, an opt-in materialized
+view can cache the result of that scan. That cache is not required by the core
+model and should not be built speculatively.
 
 ### 7.4 Why row chains fit better
 

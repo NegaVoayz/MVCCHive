@@ -7,7 +7,7 @@
 #include <mvcc_hive/detail/snapshot_state.hpp>
 #include <mvcc_hive/detail/transaction_overlay.hpp>
 #include <mvcc_hive/detail/version_store.hpp>
-#include <mvcc_hive/version_token.hpp>
+#include <mvcc_hive/diff.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -29,10 +29,10 @@ namespace mvcc_hive {
 template<class T>
 class MVCCHive {
 public:
-    using CommitId = detail::CommitId;
-    using VirtualId = detail::VirtualId;
-    using VersionToken = mvcc_hive::VersionToken;
+    using CommitId = mvcc_hive::CommitId;
+    using VirtualId = mvcc_hive::VirtualId;
     using Diff = mvcc_hive::Diff;
+    using DiffKind = mvcc_hive::DiffKind;
 
 private:
     using TargetId = detail::TargetId;
@@ -230,7 +230,7 @@ public:
         Snapshot commit() {
             ensure_active();
 
-            std::vector<Diff> diffs;
+            std::vector<detail::DiffRecord> diffs;
             std::vector<TargetId> final_targets;
             diffs.reserve(overlay_.touched().size());
             final_targets.reserve(overlay_.touched().size());
@@ -243,13 +243,11 @@ public:
                     continue;
                 }
 
-                diffs.push_back(Diff{
+                diffs.push_back(detail::DiffRecord{
                     .commit_id = owner_.commits_.head_commit() + 1,
                     .virtual_id = id,
-                    .previous_target =
-                        detail::VersionTokenAccess::from_target(previous),
-                    .current_target =
-                        detail::VersionTokenAccess::from_target(current),
+                    .previous_target = previous,
+                    .current_target = current,
                 });
                 final_targets.push_back(current);
             }
@@ -445,7 +443,7 @@ public:
         if (index >= commits_.diff_count()) {
             return std::nullopt;
         }
-        return commits_.diff(index);
+        return public_diff(commits_.diff(index));
     }
 
     [[nodiscard]] std::vector<Diff> diffs(CommitId id) const {
@@ -464,7 +462,8 @@ public:
              offset < record.diff_count;
              ++offset) {
             result.push_back(
-                commits_.diff(record.first_diff + offset));
+                public_diff(
+                    commits_.diff(record.first_diff + offset)));
         }
         return result;
     }
@@ -548,6 +547,23 @@ public:
     }
 
 private:
+    [[nodiscard]] static Diff public_diff(
+        const detail::DiffRecord& record) noexcept {
+        assert(record.previous_target != detail::no_target ||
+               record.current_target != detail::no_target);
+        DiffKind kind = DiffKind::update;
+        if (record.previous_target == detail::no_target) {
+            kind = DiffKind::insert;
+        } else if (record.current_target == detail::no_target) {
+            kind = DiffKind::remove;
+        }
+        return Diff{
+            .commit_id = record.commit_id,
+            .virtual_id = record.virtual_id,
+            .kind = kind,
+        };
+    }
+
     [[nodiscard]] Snapshot make_snapshot(CommitId id) const {
         auto guard = std::make_shared<detail::SnapshotGuard<T>>(
             snapshots_, id, state_);

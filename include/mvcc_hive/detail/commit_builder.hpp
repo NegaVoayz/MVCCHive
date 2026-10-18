@@ -21,7 +21,7 @@ public:
         RowIndex& rows,
         CommitStore& commits,
         CurrentTargetCache& current_targets,
-        std::vector<Diff> diffs)
+        std::vector<DiffRecord> diffs)
         : commit_id_(commit_id),
           parent_(parent),
           rows_(rows),
@@ -47,7 +47,7 @@ public:
 
         std::sort(
             diffs_.begin(), diffs_.end(),
-            [](const Diff& lhs, const Diff& rhs) {
+            [](const DiffRecord& lhs, const DiffRecord& rhs) {
                 return lhs.virtual_id < rhs.virtual_id;
             });
         for (std::size_t i = 1; i < diffs_.size(); ++i) {
@@ -65,14 +65,13 @@ public:
         commits_.get().reserve(1, diffs_.size());
         prepared_rows_.reserve(diffs_.size());
 
-        for (const Diff& diff : diffs_) {
+        for (const DiffRecord& diff : diffs_) {
             const RowNodeId old_head =
                 rows_.get().newest(diff.virtual_id);
             const RowNodeId new_node = rows_.get().allocate_node(
                 RowVersionNode{
                     .commit_id = commit_id_,
-                    .target =
-                        VersionTokenAccess::target(diff.current_target),
+                    .target = diff.current_target,
                     .previous = old_head,
                 });
             prepared_rows_.push_back(
@@ -80,8 +79,7 @@ public:
 
             const TargetId previous = rows_.get().visible_target(
                 diff.virtual_id, parent_);
-            if (previous !=
-                VersionTokenAccess::target(diff.previous_target)) {
+            if (previous != diff.previous_target) {
                 throw std::logic_error(
                     "commit diff does not match its parent view");
             }
@@ -103,7 +101,7 @@ public:
         for (const PreparedRow& row : prepared_rows_) {
             current_targets_.get().set(
                 row.diff.virtual_id,
-                VersionTokenAccess::target(row.diff.current_target));
+                row.diff.current_target);
         }
         commits_.get().publish_head(commit_id_);
         published_ = true;
@@ -115,7 +113,7 @@ public:
 
 private:
     struct PreparedRow {
-        Diff diff;
+        DiffRecord diff;
         RowNodeId new_node;
     };
 
@@ -131,7 +129,7 @@ private:
     std::reference_wrapper<RowIndex> rows_;
     std::reference_wrapper<CommitStore> commits_;
     std::reference_wrapper<CurrentTargetCache> current_targets_;
-    std::vector<Diff> diffs_;
+    std::vector<DiffRecord> diffs_;
     std::vector<PreparedRow> prepared_rows_;
     bool prepared_ = false;
     bool publish_started_ = false;

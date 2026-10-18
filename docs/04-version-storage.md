@@ -274,7 +274,7 @@ can form `no_target`.
 `TargetId` zero is a valid live location (block 0, slot 0). The sentinel is
 the all-ones value, not zero.
 
-`no_target` is exactly `VersionToken::none_bits`, the all-ones 64-bit value.
+`no_target` is the all-ones 64-bit value.
 The block allocator enforces the reservation structurally:
 
 ```cpp
@@ -292,7 +292,7 @@ satisfies
 (block_id << BlockLayout<T>::shift | slot_index) < no_target
 ```
 
-so `VersionToken::none()` cannot collide with any live version, regardless of
+so `no_target` cannot collide with any live version, regardless of
 how many blocks or slots are used. The reservation is checked at block
 allocation time, not assumed from the practical unlikelihood of reaching the
 top of the address space.
@@ -300,7 +300,7 @@ top of the address space.
 Target identity across time comes from the trace, not from the target word:
 
 - a `RowVersionNode` carries `CommitId`;
-- a `Diff` carries both `CommitId` and `VirtualId`;
+- an internal `DiffRecord` carries both `CommitId` and `VirtualId`;
 - a `Snapshot` filters row nodes by its own `CommitId`.
 
 The same physical location may therefore represent different versions in
@@ -316,9 +316,10 @@ The liveness rule makes location-only targets safe:
 - API operations never accept a bare target token as a capability to resolve
   payload storage.
 
-The public `VersionToken` is consequently an opaque target-location token in
-the retained trace, not a globally unique serial number. The accompanying
-`commit_id` and `virtual_id` supply historical identity.
+The target is consequently a private location in the retained trace, not a
+globally unique serial number. The accompanying `commit_id` and `virtual_id`
+supply historical identity. Public `Diff` values expose those logical IDs and a
+change tag, never the target.
 
 Removing the epoch also removes the per-slot generation array and directory
 generation array. A 64-bit target now supports nearly the full 64-bit cell

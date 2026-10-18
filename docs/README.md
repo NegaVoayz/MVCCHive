@@ -1,6 +1,6 @@
 # MVCCHive design
 
-Release status: version 1.0.2 covers the single-writer design. Multiwriter row
+Release status: version 2.0.0 covers the single-writer design. Multiwriter row
 locking is the intentionally deferred extension.
 
 `MVCCHive<T>` is a C++23 MVCC container. Stored values are constructed once in
@@ -53,9 +53,9 @@ hive. History is represented by per-row version chains plus a compact diff log.
 - `MVCCHive` and snapshot guards share ownership of the current generation.
   `clear()` and hive destruction invalidate outstanding snapshots immediately;
   the retired generation is destroyed when its last guard is released.
-- `VersionToken::none()` is the target-domain `npos`, exactly `no_target`. The
-  block allocator reserves the top block index so no live target can collide
-  with it.
+- Public history diffs are target-free values tagged `insert`, `update`, or
+  `remove`. The block allocator's reserved top block keeps `no_target`
+  unreachable from every live payload location.
 
 Section numbers in the individual documents are preserved from the original
 single-file design so existing cross-references remain stable.

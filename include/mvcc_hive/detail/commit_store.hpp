@@ -1,7 +1,8 @@
 #pragma once
 
+#include <mvcc_hive/diff.hpp>
 #include <mvcc_hive/detail/blocked_vector.hpp>
-#include <mvcc_hive/version_token.hpp>
+#include <mvcc_hive/detail/layout.hpp>
 
 #include <atomic>
 #include <cassert>
@@ -10,8 +11,20 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <type_traits>
 
 namespace mvcc_hive::detail {
+
+struct alignas(32) DiffRecord {
+    CommitId commit_id;
+    VirtualId virtual_id;
+    TargetId previous_target;
+    TargetId current_target;
+};
+
+static_assert(sizeof(DiffRecord) == 32);
+static_assert(alignof(DiffRecord) == 32);
+static_assert(std::is_trivially_copyable_v<DiffRecord>);
 
 struct CommitRecord {
     CommitId id;
@@ -28,7 +41,7 @@ static_assert(
 
 struct PrunedCommitState {
     BlockedVector<CommitRecord> commits;
-    BlockedVector<Diff> diffs;
+    BlockedVector<DiffRecord> diffs;
     CommitId first_commit_id = no_commit;
 };
 
@@ -49,7 +62,7 @@ public:
     void append_prepared(
         CommitId id,
         CommitId parent,
-        std::span<const Diff> diffs) noexcept {
+        std::span<const DiffRecord> diffs) noexcept {
         assert(commits_.capacity() >= commits_.size() + 1);
         assert(diffs_.capacity() >= diffs_.size() + diffs.size());
 
@@ -60,7 +73,7 @@ public:
             .diff_count = diffs.size(),
         };
         commits_.append_prepared(record);
-        for (const Diff& diff : diffs) {
+        for (const DiffRecord& diff : diffs) {
             diffs_.append_prepared(diff);
         }
         if (commits_.size() == 1) {
@@ -123,7 +136,7 @@ public:
         return commits_[index];
     }
 
-    [[nodiscard]] const Diff& diff(
+    [[nodiscard]] const DiffRecord& diff(
         std::size_t index) const noexcept {
         assert(index < diffs_.size());
         return diffs_[index];
@@ -201,7 +214,7 @@ public:
 
 private:
     BlockedVector<CommitRecord> commits_;
-    BlockedVector<Diff> diffs_;
+    BlockedVector<DiffRecord> diffs_;
     std::atomic<CommitId> head_commit_{no_commit};
     CommitId first_commit_id_ = no_commit;
 };

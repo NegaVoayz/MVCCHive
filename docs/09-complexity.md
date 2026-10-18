@@ -21,6 +21,7 @@ by a commit.
 | Swap | `O(1)` commit work, no `T` construction |
 | Commit with `k` changed IDs | `O(k)` row-version nodes |
 | Commit-log append | `O(1)` per commit/diff using preallocated fixed-size blocks |
+| History diff export | `O(k)` target-free `Diff` copies for the selected commit |
 | Current full scan | `O(V)` |
 | Historical full scan | `O(V + skipped row versions)` |
 | Target resolution | `O(1)`: shift/mask decode, one block-directory load, one payload offset |

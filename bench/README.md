@@ -18,10 +18,13 @@ Representative MinGW/GCC 14.2 Release measurements:
 
 | Retained history | Exact vector | Blocked log | `std::deque` | Public commit |
 |---:|---:|---:|---:|---:|
-| 5,000 | 0.11 ms | 0.01 µs | 0.02 µs | 1.31 µs |
-| 20,000 | 0.16 ms | 0.03-0.05 µs at a block boundary | 0.02 µs | 1.34 µs |
-| 50,000 | 0.72 ms | 0.01 µs | 0.03 µs | 1.35 µs |
+| 5,000 | 0.11 ms | 0.018 µs | 0.006 µs | 1.43 µs |
+| 20,000 | 0.16 ms | 0.019 µs | 0.047 µs | 1.34 µs |
+| 50,000 | 0.73 ms | 0.016 µs | 0.033 µs | 1.34 µs |
 
 The public commit cost is flat in retained history. The blocked log avoids
 whole-history copies, keeps 64 KiB of adjacent records per block, and allocates
 the next block during prepare rather than during the `noexcept` publish phase.
+At small retained sizes `std::deque` can win the isolated append microbenchmark;
+the blocked log's advantage appears as history grows and as block-boundary
+allocations are amortized.

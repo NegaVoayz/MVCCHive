@@ -10,8 +10,9 @@ The implementation should assert or enforce all of the following:
 2. A commit ID is unique and increases along the linear timeline.
 3. Installing a commit prepends exactly its normalized row-version nodes and
    updates exactly the touched current-target entries.
-4. Every diff's `previous_target` matches the parent snapshot resolution.
-5. A commit has at most one diff per `VirtualId`.
+4. Every internal `DiffRecord`'s `previous_target` matches the parent snapshot
+   resolution.
+5. A commit has at most one `DiffRecord` per `VirtualId`.
 6. A public or logical absence is `std::nullopt`; compact internal row heads
    and row links use the `no_row_node` integer sentinel; reader-directory
    entries use engaged/disengaged optionals. No nullable raw pointer is used.
@@ -70,8 +71,10 @@ The implementation should assert or enforce all of the following:
 34. Row-head updates use release publication; snapshot traversal uses acquire
     loads.
 35. A snapshot point lookup never scans unrelated rows or the global diff log.
-36. Internal and public `Diff` records are 32-byte trivially copyable values;
-    `no_target` never denotes a live version.
+36. Internal `DiffRecord` values are 32-byte trivially copyable values. Public
+    `Diff` values are 24-byte trivially copyable values containing only
+    `commit_id`, `virtual_id`, and `DiffKind`. `no_target` never denotes a
+    live version.
 37. Row heads and row links use `RowNodeId`; block-directory and row-node-
     directory entries use engaged/disengaged optional references, never
     nullable raw pointers.
@@ -93,10 +96,10 @@ The implementation should assert or enforce all of the following:
     log.
 45. A row node whose commit is newer than `head_commit_` is skipped by both
     snapshot resolution and `rebuild_current_targets()`.
-46. `VersionToken::none()` carries exactly `no_target`, a default-constructed
-    `VersionToken` is none, and no live target can equal it. The block
-    allocator enforces `block_id <= max_block_index`, reserving the top block
-    index so the sentinel is structurally unreachable.
+46. No live target equals `no_target`. The block allocator enforces
+    `block_id <= max_block_index`, reserving the top block index so the
+    sentinel is structurally unreachable. Public `Diff` values contain no
+    target field.
 47. `MVCCHive` and its snapshot guards share ownership of immutable
     `HiveState` generations containing `VersionStore` and `RowIndex`.
     `Transaction` remains a writer-locked child handle.

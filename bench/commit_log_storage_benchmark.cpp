@@ -11,9 +11,9 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
-using mvcc_hive::Diff;
 using mvcc_hive::detail::BlockedVector;
 using mvcc_hive::detail::CommitRecord;
+using mvcc_hive::detail::DiffRecord;
 
 constexpr std::size_t sample_count = 1000;
 
@@ -39,36 +39,36 @@ double microseconds(Clock::duration duration) {
 template<std::size_t BlockCapacity>
 double blocked_vector_microseconds(std::size_t history_size) {
     BlockedVector<CommitRecord, BlockCapacity> commits;
-    BlockedVector<Diff, BlockCapacity> diffs;
+    BlockedVector<DiffRecord, BlockCapacity> diffs;
     for (std::size_t i = 0; i < history_size; ++i) {
         commits.push_back(CommitRecord{});
-        diffs.push_back(Diff{});
+        diffs.push_back(DiffRecord{});
     }
     const auto start = Clock::now();
     for (std::size_t sample = 0; sample < sample_count; ++sample) {
         commits.reserve(1);
         commits.append_prepared(CommitRecord{});
         diffs.reserve(1);
-        diffs.append_prepared(Diff{});
+        diffs.append_prepared(DiffRecord{});
     }
     return microseconds(Clock::now() - start);
 }
 
 void run(std::size_t history_size) {
     std::vector<CommitRecord> exact_commits(history_size);
-    std::vector<Diff> exact_diffs(history_size);
+    std::vector<DiffRecord> exact_diffs(history_size);
     const auto exact_start = Clock::now();
     for (std::size_t sample = 0; sample < sample_count; ++sample) {
         const auto needed = exact_commits.size() + 1;
         exact_commits.reserve(needed);
         exact_diffs.reserve(exact_diffs.size() + 1);
         append_one(exact_commits, CommitRecord{});
-        append_one(exact_diffs, Diff{});
+        append_one(exact_diffs, DiffRecord{});
     }
     const auto exact_end = Clock::now();
 
     std::vector<CommitRecord> grown_commits(history_size);
-    std::vector<Diff> grown_diffs(history_size);
+    std::vector<DiffRecord> grown_diffs(history_size);
     const auto grown_start = Clock::now();
     for (std::size_t sample = 0; sample < sample_count; ++sample) {
         append_amortized(grown_commits);
@@ -77,11 +77,11 @@ void run(std::size_t history_size) {
     const auto grown_end = Clock::now();
 
     std::deque<CommitRecord> deque_commits(history_size);
-    std::deque<Diff> deque_diffs(history_size);
+    std::deque<DiffRecord> deque_diffs(history_size);
     const auto deque_start = Clock::now();
     for (std::size_t sample = 0; sample < sample_count; ++sample) {
         append_one(deque_commits, CommitRecord{});
-        append_one(deque_diffs, Diff{});
+        append_one(deque_diffs, DiffRecord{});
     }
     const auto deque_end = Clock::now();
 

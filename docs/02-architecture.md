@@ -41,8 +41,10 @@ slot swapping disappear entirely.
 - Virtual IDs are monotonic and are not recycled.
 - Undo/redo are snapshot navigation, not inverse payload operations.
 - Historical reads are first-class immutable snapshots.
-- The diff log is a row-target change log:
-  `commit_id, virtual_id, previous_target, current_target`.
+- The internal diff log is a row-target change log:
+  `commit_id, virtual_id, previous_target, current_target`. Public history
+  inspection exports only `commit_id`, `virtual_id`, and a
+  `DiffKind::{insert, update, remove}` tag.
 - Version reclamation is based on row-chain retention and snapshot horizons,
   not on a global "current book" value.
 - Payload blocks are explicitly owned through
@@ -67,13 +69,13 @@ slot swapping disappear entirely.
   `VersionStore` and `RowIndex`. `clear()` replaces the current generation and
   invalidates old handles; unreachable generation storage is destroyed when
   its last guard is released. Transactions remain writer-locked child handles.
-- Caller-visible target history uses opaque `VersionToken` values; packing,
-  directory pages, view counters, and locks are private.
+- Target locations never cross the public boundary. Packing, directory pages,
+  view counters, row-node identities, and locks are private.
 - Payload liveness uses atomic per-slot view counters and deferred retirement;
   immutable snapshots read without store locks.
 - Public nullable values and fallible lookups use `std::optional`; compact
-  internal `Diff` targets use the reserved `no_target` sentinel to stay at
-  32 bytes.
+  internal `DiffRecord` targets use the reserved `no_target` sentinel to stay
+  at 32 bytes.
 
 The row-chain representation, target encoding, and public transaction spelling
 are intentionally separable. They can be revised without changing the central

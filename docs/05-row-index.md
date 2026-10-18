@@ -171,7 +171,7 @@ public:
     ~CommitBuilder() noexcept;       // returns nodes only if publish never started
 
 private:
-    std::vector<Diff> diffs_;
+    std::vector<DiffRecord> diffs_;
     std::vector<RowNodeId> new_nodes_;
     std::vector<RowNodeId> old_heads_;  // rollback/diagnostic journal
     bool publish_started_ = false;
@@ -187,7 +187,7 @@ than silently rolled back.
 
 #### Prepare phase (may throw)
 
-1. Normalize the transaction overlay into one `Diff` per touched
+1. Normalize the transaction overlay into one `DiffRecord` per touched
    `VirtualId`, sorted by `VirtualId`.
 2. Grow the row-head table and `current_targets` to cover the largest
    touched `VirtualId`. New cache entries start as `no_target`.

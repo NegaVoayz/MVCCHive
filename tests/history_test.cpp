@@ -11,19 +11,17 @@
 
 namespace {
 
-using mvcc_hive::Diff;
-using mvcc_hive::VersionToken;
 using mvcc_hive::detail::CommitBuilder;
 using mvcc_hive::detail::CommitId;
 using mvcc_hive::detail::CommitStore;
 using mvcc_hive::detail::CurrentTargetCache;
+using mvcc_hive::detail::DiffRecord;
 using mvcc_hive::detail::RowIndex;
 using mvcc_hive::detail::RowNodeLayout;
 using mvcc_hive::detail::RowNodeId;
 using mvcc_hive::detail::RowVersionNode;
 using mvcc_hive::detail::TargetId;
 using mvcc_hive::detail::VersionStore;
-using mvcc_hive::detail::VersionTokenAccess;
 using mvcc_hive::detail::VirtualId;
 using mvcc_hive::detail::no_row_node;
 using mvcc_hive::detail::no_target;
@@ -38,20 +36,16 @@ void require(bool condition, const char* expression, int line) {
 
 #define REQUIRE(expression) require((expression), #expression, __LINE__)
 
-VersionToken token(TargetId target) {
-    return VersionTokenAccess::from_target(target);
-}
-
-Diff diff(
+DiffRecord diff(
     CommitId commit,
     VirtualId id,
     TargetId previous,
     TargetId current) {
-    return Diff{
+    return DiffRecord{
         .commit_id = commit,
         .virtual_id = id,
-        .previous_target = token(previous),
-        .current_target = token(current),
+        .previous_target = previous,
+        .current_target = current,
     };
 }
 
@@ -68,7 +62,7 @@ struct HistoryFixture {
     void commit(
         CommitId id,
         CommitId parent,
-        std::vector<Diff> diffs) {
+        std::vector<DiffRecord> diffs) {
         CommitBuilder builder{
             id, parent, rows, commits, current, std::move(diffs)};
         builder.prepare();
@@ -225,7 +219,7 @@ void check_commit_log_uses_preallocated_blocks() {
     REQUIRE(initial_commit_capacity == block_capacity);
     REQUIRE(initial_diff_capacity == block_capacity);
 
-    const Diff record = diff(1, 0, no_target, 0);
+    const DiffRecord record = diff(1, 0, no_target, 0);
     for (std::size_t i = 1; i <= block_capacity; ++i) {
         store.reserve(1, 1);
         store.append_prepared(i, i - 1, std::span{&record, 1});

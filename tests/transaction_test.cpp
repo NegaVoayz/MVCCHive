@@ -75,13 +75,13 @@ void check_insert_read_and_history() {
     REQUIRE(diffs.size() == 1);
     REQUIRE(diffs[0].commit_id == 1);
     REQUIRE(diffs[0].virtual_id == id);
-    REQUIRE(!diffs[0].previous_target.has_value());
-    REQUIRE(diffs[0].current_target.has_value());
+    REQUIRE(diffs[0].kind == MVCCHive<Value>::DiffKind::insert);
+    REQUIRE(!diffs[0].had_previous());
+    REQUIRE(diffs[0].has_current());
 
     const auto first_diff = hive.diff(0);
     REQUIRE(first_diff.has_value());
-    REQUIRE(first_diff->current_target ==
-            diffs[0].current_target);
+    REQUIRE(first_diff->kind == diffs[0].kind);
     REQUIRE(!hive.diff(1).has_value());
 }
 
@@ -113,6 +113,12 @@ void check_replace_preserves_old_payload() {
     REQUIRE(first.at(id).number == 1);
     REQUIRE(&first.at(id) == old_address);
     REQUIRE(&second.at(id) != old_address);
+
+    const auto update_diffs = hive.diffs(second.commit_id());
+    REQUIRE(update_diffs.size() == 1);
+    REQUIRE(update_diffs[0].kind == MVCCHive<Value>::DiffKind::update);
+    REQUIRE(update_diffs[0].had_previous());
+    REQUIRE(update_diffs[0].has_current());
 }
 
 void check_erase_and_swap() {
@@ -140,6 +146,12 @@ void check_erase_and_swap() {
     REQUIRE(initial.at(first).number == 10);
     REQUIRE(initial.at(second).number == 20);
 
+    const auto swap_diffs = hive.diffs(swapped.commit_id());
+    REQUIRE(swap_diffs.size() == 2);
+    for (const auto& diff : swap_diffs) {
+        REQUIRE(diff.kind == MVCCHive<Value>::DiffKind::update);
+    }
+
     auto tx3 = hive.begin_transaction();
     tx3.erase(first);
     REQUIRE(!tx3.find(first).has_value());
@@ -155,6 +167,13 @@ void check_erase_and_swap() {
     REQUIRE(!erased.contains(first));
     REQUIRE(swapped.at(first).number == 20);
     REQUIRE(erased.at(second).number == 10);
+
+    const auto erase_diffs = hive.diffs(erased.commit_id());
+    REQUIRE(erase_diffs.size() == 1);
+    REQUIRE(erase_diffs[0].virtual_id == first);
+    REQUIRE(erase_diffs[0].kind == MVCCHive<Value>::DiffKind::remove);
+    REQUIRE(erase_diffs[0].had_previous());
+    REQUIRE(!erase_diffs[0].has_current());
 }
 
 void check_rollback_destroys_only_staged_versions() {

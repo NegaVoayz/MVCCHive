@@ -41,26 +41,25 @@
 - A public-surface test confirms `TargetId`, `VersionBlock`, `DirectoryPage`,
   and `BlockDirectory` are not nameable by a caller.
 - Nullability tests verify that missing lookups return `std::nullopt`, erased
-  public diff targets are `VersionToken::none()`, and successful fallible
-  lookups return an engaged optional reference.
+  public diffs carry `DiffKind::remove`, and successful fallible lookups
+  return an engaged optional reference.
 - Ownership tests prove that releasing a block resets exactly one owning
   `unique_ptr` and that the reader-directory entry is cleared before readers
   can observe the empty slot.
 - Lifetime-ownership assertions verify that `MVCCHive` and snapshot guards
   share the generation containing `VersionStore` and `RowIndex`, while a
   `Transaction` remains a writer-locked child handle.
-- Layout assertions verify that `VersionToken` is 8 bytes, `Diff` is 32 bytes
-  and trivially copyable, and instrumentation verifies two adjacent diffs
-  occupy one 64-byte-aligned diff-log line.
+- Layout assertions verify that public `Diff` is 24 bytes and trivially
+  copyable, internal `DiffRecord` is 32 bytes and trivially copyable, and
+  instrumentation verifies two adjacent internal records occupy one
+  64-byte-aligned diff-log line.
 - Sentinel tests verify that `no_target` is rejected by every target resolver
   and never appears as a constructed payload version.
-- Token tests verify that `VersionToken::none()` equals a default-constructed
-  token, that `has_value()` is false for it, and that no live target equals
-  it. A live target zero (`block 0, slot 0`) must still report
-  `has_value() == true`. An internal static assertion verifies
-  `none_bits == no_target`. Block allocation above `max_block_index` fails
-  during prepare rather than producing a colliding token; the test covers
-  both `shift == 0` (capacity 1) and a normal power-of-two capacity.
+- Sentinel tests verify that no live target equals `no_target`. A live target
+  zero (`block 0, slot 0`) remains valid. Block allocation above
+  `max_block_index` fails during prepare rather than producing a colliding
+  target; the test covers both `shift == 0` (capacity 1) and a normal
+  power-of-two capacity.
 - Index-range tests verify shift/mask decoding near the top of the 64-bit
   target space without allocating a dense directory for unused blocks.
 - Index instrumentation verifies that a commit touching `k` IDs creates
@@ -133,8 +132,9 @@
 - A teardown test with an active transaction verifies that `~MVCCHive` waits
   for the writer lock and does not destroy the store underneath a live
   transaction.
-- Tokens and diffs obtained before `clear()` are stale afterward; no resolver
-  accepts an old target as a live capability.
+- Public diffs are ordinary copies and remain readable after `clear()`, but
+  their commit and virtual IDs no longer resolve in the new generation. No
+  public record contains a location that could be used as a capability.
 - Directory growth and block release never invoke a `T` move or copy.
 - Iterating or updating free-slot metadata does not read or write payload
   bytes.

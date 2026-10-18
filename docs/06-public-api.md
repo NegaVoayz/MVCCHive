@@ -13,29 +13,19 @@ public:
     using VirtualId = std::uint64_t;
     using CommitId = std::uint64_t;
 
-    // Opaque, equality-comparable target location in the retained trace.
-    // Its bit layout is intentionally not part of the public contract.
-    struct VersionToken {
-        friend bool operator==(VersionToken, VersionToken) = default;
-        static constexpr VersionToken none() noexcept {
-            return VersionToken{};
-        }
-        bool has_value() const noexcept {
-            return bits != none_bits;
-        }
-
-    private:
-        friend class MVCCHive;
-        static constexpr std::uint64_t none_bits =
-            std::numeric_limits<std::uint64_t>::max();
-        std::uint64_t bits = none_bits;
+    enum class DiffKind : std::uint8_t {
+        insert,
+        update,
+        remove,
     };
 
-    struct alignas(32) Diff {
+    struct Diff {
         CommitId commit_id;
         VirtualId virtual_id;
-        VersionToken previous_target;
-        VersionToken current_target;
+        DiffKind kind;
+
+        bool had_previous() const noexcept;
+        bool has_current() const noexcept;
     };
 
     class Snapshot;
@@ -61,7 +51,6 @@ private:
     using TargetId = std::uint64_t;  // private block/slot location
     static constexpr TargetId no_target =
         std::numeric_limits<TargetId>::max();
-    static_assert(no_target == VersionToken::none_bits);
     using RowNodeId = std::uint64_t; // private row-version index
     using TransactionId = std::uint64_t;
 
@@ -104,16 +93,11 @@ private:
 };
 ```
 
-`VersionToken` is an opaque target-location token for history inspection. A
-caller can compare tokens, but cannot decode a block index, reach payload
-storage, or use a token to mutate a version. Historical identity comes from the
-accompanying commit and virtual IDs. The token is one machine word, so the
-public `Diff` representation remains 32 bytes as well. `VersionToken::none()`
-is the all-ones sentinel, a default-constructed token is none, and the target
-allocator's top-block reservation makes that bit pattern unreachable by any
-live version. Projection is exactly
-`bits = (target == no_target) ? none_bits : target`; no other transformation
-or normalization is applied.
+`Diff` is a copied public value containing only the logical commit, virtual ID,
+and a tag from the same Insert/Update/Remove vocabulary as the history model.
+It contains no target location, block index, slot index, or row-node identity.
+A caller that needs the before or after value resolves it through a snapshot;
+the diff itself remains a compact, representation-independent record.
 
 `state_` owns one generation's `VersionStore` and `RowIndex`. Snapshot guards
 hold another strong reference to that same generation. `~MVCCHive()` first
@@ -122,12 +106,6 @@ the hive's generation reference. If any snapshot handle still exists, the
 generation and every payload it owns stay alive until the final guard is
 released. An in-flight snapshot read therefore cannot observe destroyed
 storage during hive teardown or `clear()`.
-
-Token equality means equal physical target location in the retained trace. It
-does not imply equal version identity across different commit IDs, because a
-slot may be reused after all live anchors are gone. A token is not a
-lifetime-extending handle; tokens returned before `clear()` or before the
-hive was destroyed are stale afterward.
 
 History inspection returns values rather than references into mutable log
 storage. A concurrent writer can therefore append or compact the log without
@@ -176,8 +154,18 @@ version constructed only by that transaction. A transaction holds non-owning
 store and row-index references and must be completed or destroyed before its
 hive is destroyed.
 
-`replace` is the new name for the old `update`. It constructs a completely new
-version and prepends a row-version node. It never assigns over the old `T`.
+`replace` is the transaction spelling of the Update operation. It constructs
+a completely new version and prepends a row-version node. It never assigns
+over the old `T`.
+
+The normalized history vocabulary is:
+
+| Transaction spelling | Public `DiffKind` |
+| --- | --- |
+| `emplace` | `insert` |
+| `replace` | `update` |
+| `erase` | `remove` |
+| `swap` | two `update` records |
 
 All staging, locking, anchor bookkeeping, and commit construction are private
 to `Transaction`. A caller cannot reach a target ID, a block, or the parent
@@ -358,7 +346,7 @@ the hive's current state.
 The public contract consists of:
 
 - `MVCCHive<T>`, `Snapshot`, and `Transaction`;
-- `VirtualId`, `CommitId`, and opaque `VersionToken`;
+- `VirtualId`, `CommitId`, and tagged `Diff`;
 - logical snapshot reads and normalized history diffs.
 
 Everything below the logical row index is private:
@@ -373,6 +361,6 @@ Everything below the logical row index is private:
 - snapshot registry, commit records, and diff-log representation;
 - writer mutex, publication atomics, and storage allocation.
 
-No public method accepts a block index, slot index, `VersionToken`, or raw
-target pointer as a capability. This keeps callers from depending on a layout
-that the MVCC design must remain free to change.
+No public method accepts or returns a block index, slot index, target token, or
+raw target pointer as a capability. This keeps callers from depending on a
+layout that the MVCC design must remain free to change.

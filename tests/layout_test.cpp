@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <type_traits>
 
 namespace {
 
@@ -13,7 +14,6 @@ using mvcc_hive::detail::BlockLayout;
 using mvcc_hive::detail::RowNodeId;
 using mvcc_hive::detail::RowNodeLayout;
 using mvcc_hive::detail::TargetId;
-using mvcc_hive::detail::VersionTokenAccess;
 using mvcc_hive::detail::no_row_node;
 using mvcc_hive::detail::no_target;
 
@@ -66,20 +66,36 @@ void check_target_reservation() {
     const TargetId zero = Layout::encode(0, 0);
     REQUIRE(zero == 0);
     REQUIRE(Layout::is_live_target(zero));
-    REQUIRE(VersionTokenAccess::from_target(zero).has_value());
-    REQUIRE(VersionTokenAccess::target(
-                VersionTokenAccess::from_target(zero)) == zero);
 
     const TargetId last =
         Layout::encode(Layout::max_block_index, Layout::slot_mask);
     REQUIRE(last == Layout::highest_live_target);
     REQUIRE(last < no_target);
     REQUIRE(Layout::is_live_target(last));
-    REQUIRE(VersionTokenAccess::from_target(last).has_value());
 
-    REQUIRE(VersionTokenAccess::from_target(no_target).has_value() == false);
     REQUIRE(!Layout::is_live_target(no_target));
     REQUIRE(!Layout::can_encode(Layout::max_block_index + 1, 0));
+}
+
+void check_public_diff_layout() {
+    using mvcc_hive::Diff;
+    using mvcc_hive::DiffKind;
+
+    static_assert(sizeof(Diff) == 24);
+    static_assert(alignof(Diff) == 8);
+    static_assert(std::is_trivially_copyable_v<Diff>);
+    static_assert(std::is_standard_layout_v<Diff>);
+    static_assert(offsetof(Diff, commit_id) == 0);
+    static_assert(offsetof(Diff, virtual_id) == 8);
+    static_assert(offsetof(Diff, kind) == 16);
+
+    const Diff record{
+        .commit_id = 3,
+        .virtual_id = 7,
+        .kind = DiffKind::update,
+    };
+    REQUIRE(record.had_previous());
+    REQUIRE(record.has_current());
 }
 
 void check_single_slot_layout() {
@@ -155,6 +171,7 @@ int main() {
     check_adaptive_layout<Payload128>(128, 7);
     check_adaptive_layout<Payload392>(32, 5);
     check_target_reservation();
+    check_public_diff_layout();
     check_single_slot_layout();
     check_target_projection();
     check_row_node_projection();

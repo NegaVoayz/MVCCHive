@@ -4,10 +4,10 @@
 
 ## 4. The history diff
 
-The minimal history record is:
+The internal normalized history record is:
 
 ```cpp
-struct alignas(32) Diff {
+struct alignas(32) DiffRecord {
     CommitId   commit_id;
     VirtualId  virtual_id;
     TargetId   previous_target;
@@ -15,23 +15,54 @@ struct alignas(32) Diff {
 };
 
 constexpr TargetId no_target = std::numeric_limits<TargetId>::max();
-static_assert(sizeof(Diff) == 32);
+static_assert(sizeof(DiffRecord) == 32);
+static_assert(std::is_trivially_copyable_v<DiffRecord>);
+```
+
+`DiffRecord` never appears in the public API. Its physical targets are needed
+for commit validation and row-chain publication, but exposing them would leak
+the storage projection and make the logical contract depend on an internal
+layout.
+
+`no_target` is the target-domain `npos` sentinel and is never accepted as a
+live target. `no_row_node` is the analogous sentinel for row chains.
+
+History inspection returns a copied public value:
+
+```cpp
+enum class DiffKind : std::uint8_t {
+    insert,
+    update,
+    remove,
+};
+
+struct Diff {
+    CommitId commit_id;
+    VirtualId virtual_id;
+    DiffKind kind;
+};
+
+static_assert(sizeof(Diff) == 24);
 static_assert(std::is_trivially_copyable_v<Diff>);
 ```
 
-This is the normalized internal history record. If history is exposed through
-the public API, each `TargetId` is projected to an opaque `VersionToken`;
-`no_target` maps to `VersionToken::none()`. The caller never receives the
-packed block/slot representation.
+The tag is derived from target presence, using the same Insert/Update/Remove
+vocabulary as the history model:
 
-`no_target` is the target-domain `npos` sentinel and is never accepted as a
-live target; `VersionToken::none()` carries exactly that bit pattern, and a
-default-constructed `VersionToken` is none. `no_row_node` is the analogous
-sentinel for row chains.
-Diff-log blocks are allocated with 64-byte-aligned bases, so the compact
-32-byte layout places two diffs in a typical 64-byte cache line. This does not
-change point-read complexity, but it removes the optional-state words and
-improves diff-log scans, pruning, and history export bandwidth.
+- `insert`: `previous_target == no_target`, `current_target != no_target`;
+- `update`: both targets are live;
+- `remove`: `previous_target != no_target`,
+  `current_target == no_target`.
+
+The public record contains no target, block, slot, row-node, or generation
+field. A caller that needs values resolves them through snapshots using
+`commit_id` and `virtual_id`. This keeps the export stable if the physical
+storage representation changes.
+
+Diff-log blocks are allocated with 64-byte-aligned bases, so the internal
+32-byte record places two records in a typical 64-byte cache line. This does
+not change point-read complexity, but it removes the optional-state words and
+improves diff-log scans and pruning.
 
 For a normalized commit, there is at most one diff per `VirtualId`. If a
 transaction touches the same virtual ID several times, those edits collapse
@@ -51,9 +82,9 @@ The meanings are:
 Swapping therefore creates no payload version and performs no payload
 operation. The two virtual IDs exchange the targets they project to.
 
-`previous_target` is not merely an undo hint. It is an invariant check against
-the row chain at the transaction's base. A commit is valid only if, for every
-diff:
+The internal `previous_target` is not merely an undo hint. It is an invariant
+check against the row chain at the transaction's base. A commit is valid only
+if, for every internal diff:
 
 ```text
 resolve(parent_snapshot, diff.virtual_id).value_or(no_target)

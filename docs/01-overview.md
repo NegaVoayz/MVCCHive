@@ -47,9 +47,9 @@ payload mutations that happen to be reversible.
   wrapped in a node or padded with hive bookkeeping fields.
 
 - Public and fallible absence is represented by `std::optional`; nullable
-  values are not expressed with a null raw pointer. Compact internal `Diff`
-  records use the reserved `no_target` sentinel, and public diff inspection
-  represents that same absence as `VersionToken::none()`.
+  values are not expressed with a null raw pointer. Compact internal
+  `DiffRecord`s use the reserved `no_target` sentinel; public diffs expose only
+  `insert`, `update`, or `remove` tags.
 
 - Raw storage pointers may appear only as transient locals for placement
   construction or payload-offset arithmetic; they never represent ownership,
@@ -86,7 +86,8 @@ user's concern and is outside the no-move rule for stored values.
 | `CommitId` | Identifies one point in the linear commit timeline. Starts at 1 and increases monotonically. |
 | `VirtualId` | Stable logical element identity. It is never a physical payload address. |
 | `TargetId` | Opaque location of one payload slot, encoded as `(block_id << BlockLayout<T>::shift) + slot_index`. |
-| `VersionToken` | Public opaque token for a target location; `none()` is exactly `no_target` and is never a live target. |
+| `DiffKind` | Public tag for a normalized history change: `insert`, `update`, or `remove`. |
+| `Diff` | Public copied history record containing `commit_id`, `virtual_id`, and `DiffKind`; it contains no target identity. |
 | `RowNodeId` | Compact private index of one `RowVersionNode`, encoded as `(chunk_id << RowNodeChunk::shift) + slot_index`. Zero is the empty/tail sentinel. |
 | `RowVersionChain` | Immutable nodes ordered newest-to-oldest for one `VirtualId`, each naming a commit and the target visible from that commit onward. |
 | `CurrentTargets` | Writer-only dense cache of the target currently mapped by each `VirtualId`; rebuildable from the authoritative row heads. |

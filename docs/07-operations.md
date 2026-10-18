@@ -51,12 +51,17 @@ for each touched virtual_id:
     previous = resolve(parent_snapshot, virtual_id).value_or(no_target)
     current  = transaction_final_value(virtual_id)
     if previous != current:
-        emit Diff{commit_id, virtual_id, previous, current}
+        emit DiffRecord{commit_id, virtual_id, previous, current}
 ```
 
 The resulting diffs are sorted by `VirtualId`. This makes the log stable and
 removes the need to interpret intermediate transaction states during replay
 or audit.
+
+Public inspection maps the internal record to
+`Diff{commit_id, virtual_id, DiffKind}`: `previous == no_target` is `insert`,
+`current == no_target` is `remove`, and two live targets are `update`. The
+target values stay private.
 
 If the normalized set is empty, `commit()` returns the parent snapshot and
 publishes no commit.

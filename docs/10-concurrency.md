@@ -62,8 +62,8 @@ and to bound pruning. Each guard holds a `std::weak_ptr` to the registry, so a
 guard that outlives the hive performs no registration access on destruction.
 
 Commit-log inspection (`diff` and `diffs`) takes a short shared commit-store
-lock and returns owned `Diff` values. It never returns a pointer or span into
-storage that the writer may append to or compact concurrently.
+lock and returns owned, target-free `Diff` values. It never returns a pointer
+or span into storage that the writer may append to or compact concurrently.
 
 ### 14.3 Stable block directory
 
@@ -219,9 +219,9 @@ publication mutex decides the commit order, not the transaction's interactive
 lifetime.
 
 The published commit record's `parent` is the current head at publication.
-Each diff's `previous_target` is the value from the transaction's parent
-snapshot, which the row-lock revalidation proves still matches the current
-head for every touched row.
+Each internal `DiffRecord`'s `previous_target` is the value from the
+transaction's parent snapshot, which the row-lock revalidation proves still
+matches the current head for every touched row.
 
 When multi-writer mode is enabled, an automatically assigned `CommitId` is
 minted under the publication mutex. An explicit-ID overload must also validate

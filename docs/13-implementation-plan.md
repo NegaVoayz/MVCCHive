@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: version 1.0.2. M0 through M6 are implemented for the single-writer
+Status: version 2.0.0. M0 through M6 are implemented for the single-writer
 design. Multiwriter row locking remains the intentional post-1.0 boundary.
 
 The first goal is a small, testable vertical slice that proves the layout,
@@ -12,7 +12,7 @@ adding pruning and multi-writer work.
 ```text
 include/mvcc_hive/
   mvcc_hive.hpp                  public entry point and MVCCHive<T>
-  version_token.hpp              public opaque target token and Diff
+  diff.hpp                       public target-free Diff and DiffKind
   detail/
     layout.hpp                   BlockLayout<T>, RowNodeLayout, sentinels
     version_block.hpp            VersionBlock<T> and block metadata
@@ -54,15 +54,15 @@ project headers.
 
 ### M1: Layout and sentinel invariants
 
-Status: implemented in `detail/layout.hpp`, `version_token.hpp`, and
+Status: implemented in `detail/layout.hpp`, `diff.hpp`, and
 `tests/layout_test.cpp`.
 
 - Implement `BlockLayout<T>` with the 16 KiB payload budget and power-of-two
   capacities.
 - Implement `TargetId` encode/decode and `max_block_index` reservation.
 - Implement `RowNodeId` encode/decode and the zero sentinel.
-- Add static assertions for `Diff`, `VersionToken`, `RowVersionNode`, and
-  `RowHead` sizes.
+- Add static assertions for public `Diff`, internal `DiffRecord`,
+  `RowVersionNode`, and `RowHead` sizes.
 
 Acceptance: layout tests cover `sizeof(T)` 8, 64, 128, and 392 bytes; target
 zero is live; no live target equals `no_target`.

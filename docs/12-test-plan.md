@@ -91,7 +91,8 @@
   `clear_history()` baseline whose commit ID is 1.
 - A replace after undo publishes a new commit at the checkout's next ID,
   removes the old future diffs, and makes `redo()` return false.
-- An empty commit after undo preserves the redo tail.
+- An argument-free empty commit after undo preserves the redo tail; an
+  explicit empty commit advances to its supplied ID.
 - Caller-supplied commit IDs may be sparse and can align multiple hives on the
   same checkout ID; an explicit empty commit advances an otherwise unchanged
   hive.

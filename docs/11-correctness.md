@@ -149,9 +149,9 @@ The implementation should assert or enforce all of the following:
     by explicit retained metadata rather than a commit-ID heuristic, including
     when the baseline ID is 1. Neither operation drops retained history or
     changes row chains.
-61. A non-empty commit from an older checkout prepares first, then truncates
-    the redo tail in place. A failed prepare or a snapshot pinned above the
-    checkout leaves the tail and checkout unchanged.
+61. A commit that publishes from an older checkout prepares first, then
+    truncates the redo tail in place. A failed prepare or a snapshot pinned
+    above the checkout leaves the tail and checkout unchanged.
 62. An argument-free empty commit preserves the redo tail. An explicit empty
     commit publishes a zero-diff commit and advances the checkout.
 63. Future row nodes detached by checkout truncation are not released while

@@ -86,7 +86,7 @@ user's concern and is outside the no-move rule for stored values.
 
 | Name | Meaning |
 | --- | --- |
-| `CommitId` | Identifies one point in the linear commit timeline. Starts at 1 and increases monotonically. |
+| `CommitId` | Identifies one point in the linear commit timeline. Automatic IDs start at 1; caller-supplied IDs may be sparse but must exceed the hive's monotonic high-water mark. |
 | `VirtualId` | Stable logical element identity. It is never a physical payload address. |
 | `TargetId` | Opaque location of one payload slot, encoded as `(block_id << BlockLayout<T>::shift) + slot_index`. |
 | `DiffKind` | Public tag for a normalized history change: `insert`, `update`, or `remove`. |
@@ -100,6 +100,7 @@ user's concern and is outside the no-move rule for stored values.
 | `Snapshot` | A read-only view pinned to one `CommitId` and protected by the active-snapshot horizon. |
 | `Transaction` | A private mutable overlay over a parent snapshot, plus versions it has constructed but not published. |
 | `Install` | Apply a normalized diff set to the current targets and prepend the corresponding row-version nodes. |
+| `Max commit ID` | The largest commit ID ever issued by a hive. It does not decrease after undo, pruning, or `clear_history()`; only `clear()` resets it. |
 
 Public and fallible lookup APIs use `std::nullopt` for absence. Compact
 internal mapping records use the reserved `no_target` value. A row-version node

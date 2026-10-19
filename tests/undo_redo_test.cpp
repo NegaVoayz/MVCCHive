@@ -293,19 +293,23 @@ void check_undo_floor_errors() {
     REQUIRE(!hive.redo());
 }
 
-void check_first_commit_is_not_an_undo_floor() {
+void check_clear_history_at_first_commit_is_an_undo_floor() {
     Hive hive;
     auto tx = hive.begin_transaction();
     const auto id = tx.emplace(1);
     static_cast<void>(tx.commit());
 
     hive.clear_history();
-    REQUIRE(hive.undo());
-    REQUIRE(hive.head().commit_id() == 0);
-    REQUIRE(!hive.head().contains(id));
-    REQUIRE(hive.redo());
+    bool threw = false;
+    try {
+        static_cast<void>(hive.undo());
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    REQUIRE(threw);
     REQUIRE(hive.head().commit_id() == 1);
     REQUIRE(hive.head().at(id) == 1);
+    REQUIRE(!hive.redo());
 }
 
 }  // namespace
@@ -320,5 +324,5 @@ int main() {
     check_clear_history_uses_checkout();
     check_multi_level_undo_redo();
     check_undo_floor_errors();
-    check_first_commit_is_not_an_undo_floor();
+    check_clear_history_at_first_commit_is_an_undo_floor();
 }

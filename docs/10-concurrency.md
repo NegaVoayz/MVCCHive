@@ -229,9 +229,11 @@ Each internal `DiffRecord`'s `previous_target` is the value from the
 transaction's parent snapshot, which the row-lock revalidation proves still
 matches the current checkout for every touched row.
 
-When multi-writer mode is enabled, an automatically assigned `CommitId` is
-minted under the publication mutex. An explicit-ID overload must also validate
-ordering and uniqueness there, or be removed from the concurrent API.
+In the current single-writer implementation, `commit(id)` validates the
+caller-supplied ID against the hive's high-water mark while the writer lock is
+held. When multi-writer mode is enabled, both automatic ID minting and explicit
+ID validation must move under the publication mutex so concurrent publishers
+cannot reuse or invert IDs.
 
 #### Deadlock and isolation limits
 

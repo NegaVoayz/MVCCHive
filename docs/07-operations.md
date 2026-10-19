@@ -63,14 +63,16 @@ Public inspection maps the internal record to
 `current == no_target` is `remove`, and two live targets are `update`. The
 target values stay private.
 
-If the normalized set is empty, `commit()` returns the parent snapshot and
-publishes no commit.
+If the normalized set is empty, argument-free `commit()` returns the parent
+snapshot and publishes no commit. `commit(id)` still publishes an empty commit
+at the supplied ID so a hive can advance to a shared checkout.
 
 ### 10.6 Commit publication
 
 The publication sequence is:
 
-1. Validate the commit ID and transaction state.
+1. Validate the transaction state and, for `commit(id)`, require the ID to be
+   nonzero and greater than `max_commit_id()`.
 2. Build the normalized diff records.
 3. Grow the row table and `current_targets`, and reserve every node, log, and
    retirement slot.
@@ -102,7 +104,7 @@ cannot leave the authoritative row head and the derived cache out of sync.
 records. They rebuild `current_targets` for the selected commit and leave the
 redo tail available.
 
-When a non-empty transaction commits from an older checkout:
+When a transaction publishes from an older checkout:
 
 1. Normalize and validate its diffs against the checkout.
 2. Allocate and prepare its new row nodes against the checkout-visible chain.
@@ -112,7 +114,10 @@ When a non-empty transaction commits from an older checkout:
    logs in place.
 5. Publish the new row nodes, commit record, and checkout.
 
-The future commit-ID range is reused because those commits no longer exist in
-the retained timeline. An active snapshot above the checkout blocks step 4
-before any mutation. A failed prepare leaves the redo tail and checkout
-unchanged. An empty commit does not trigger truncation.
+An automatic commit reuses the future commit-ID range because those commits no
+longer exist in the retained timeline. An explicit commit must use an ID above
+the hive's high-water mark, even if that ID belongs to the discarded range; this
+keeps process-wide explicit sequences unambiguous. An active snapshot above
+the checkout blocks step 4 before any mutation. A failed prepare leaves the
+redo tail and checkout unchanged. An argument-free empty commit does not
+trigger truncation; an explicit empty commit follows this publication path.

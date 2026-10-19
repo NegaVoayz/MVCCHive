@@ -130,10 +130,24 @@ struct Commit {
 ```
 
 The diff log is append-only while the checkout advances. `undo()` and `redo()`
-move the checkout without changing the retained tail. A new commit from an
-older checkout truncates the redo tail in place and reuses its commit-ID range.
-Commit IDs start at 1; commit 0 means "before the first retained commit" where
-that distinction is needed.
+move the checkout without changing the retained tail. An automatic commit from
+an older checkout truncates the redo tail in place and reuses its commit-ID
+range. Automatic IDs start at 1; commit 0 means "before the first retained
+commit" where that distinction is needed.
+
+`Transaction::commit(CommitId)` publishes a caller-supplied ID instead. The ID
+must be nonzero and strictly greater than `MVCCHive::max_commit_id()`, the
+largest ID ever issued by that hive, including IDs whose commits were pruned
+or cleared. This turns a process-level sequence into a common checkout
+sequence across hives. A supplied ID may leave gaps: commit lookup first uses
+the O(1) contiguous projection and falls back to binary search for a sparse
+timeline. `max_commit_id()` never decreases after undo, pruning, or
+`clear_history()`; `clear()` starts a fresh history and resets it.
+
+An explicit commit with no normalized diffs still publishes an empty commit.
+That is how a hive with no local changes advances to the shared checkout ID.
+The argument-free `commit()` keeps the earlier behavior: an empty transaction
+publishes nothing and preserves the redo tail.
 
 The append-only commit and diff logs use fixed-size blocked storage rather than
 a monolithic reallocating vector. The next block is prepared before a commit
@@ -147,8 +161,10 @@ The timeline is linear:
 - undo from the original first commit selects the empty origin commit 0;
 - undo at the first retained commit after pruning or `clear_history()` is an
   error, because its predecessor is no longer retained;
+- a baseline created by `clear_history()` is an undo floor even when its ID is
+  1; it is not mistaken for the original first commit;
 - a successful commit after undo discards every commit newer than the checkout;
-- an empty commit preserves the redo tail;
+- an argument-free empty commit preserves the redo tail;
 - historical snapshots are read-only;
 - a new commit does not rewrite an old row-version node;
 - branching and merge are out of scope: row-version chains encode one linear

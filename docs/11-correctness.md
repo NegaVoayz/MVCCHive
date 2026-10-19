@@ -8,7 +8,9 @@ The implementation should assert or enforce all of the following:
 
 1. A `VirtualId` is never reused.
 2. A commit ID is unique and increases within the retained linear timeline.
-   IDs belonging to a discarded redo tail may be reused by its replacement.
+   Automatic IDs may reuse the range of a discarded redo tail. A caller-supplied
+   ID must be strictly greater than the hive's monotonic high-water mark, so an
+   explicit sequence never collides with retained or cleared history.
 3. Installing a commit prepends exactly its normalized row-version nodes and
    updates exactly the touched current-target entries.
 4. Every internal `DiffRecord`'s `previous_target` matches the parent snapshot
@@ -143,12 +145,17 @@ The implementation should assert or enforce all of the following:
 60. `undo()` moves the checkout to its retained parent; `redo()` moves it to
     the next retained child. Undo from the original first commit may move to
     empty commit 0. Undo at a pruned or cleared retention floor throws and
-    does not change the checkout. Neither operation drops retained history or
+    does not change the checkout. A `clear_history()` baseline is identified
+    by explicit retained metadata rather than a commit-ID heuristic, including
+    when the baseline ID is 1. Neither operation drops retained history or
     changes row chains.
 61. A non-empty commit from an older checkout prepares first, then truncates
     the redo tail in place. A failed prepare or a snapshot pinned above the
     checkout leaves the tail and checkout unchanged.
-62. An empty commit preserves the redo tail.
+62. An argument-free empty commit preserves the redo tail. An explicit empty
+    commit publishes a zero-diff commit and advances the checkout.
 63. Future row nodes detached by checkout truncation are not released while
     any snapshot can still traverse them. Their target anchors remain until
     the same safe-reclamation point.
+64. `max_commit_id()` is the maximum ID ever issued by the hive. Undo, pruning,
+    and `clear_history()` do not lower it; only destructive `clear()` resets it.

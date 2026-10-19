@@ -229,14 +229,49 @@ public:
         }
 
         Snapshot commit() {
+            return commit_impl(std::nullopt);
+        }
+
+        // Publishes with a caller-supplied commit ID. The ID must be greater
+        // than every ID ever issued by this hive, including cleared history.
+        Snapshot commit(CommitId commit_id) {
+            return commit_impl(commit_id);
+        }
+
+        void rollback() noexcept {
+            if (!active_) {
+                return;
+            }
+            discard_staged();
+            active_ = false;
+            writer_lock_.unlock();
+        }
+
+    private:
+        friend class MVCCHive;
+
+        Snapshot commit_impl(std::optional<CommitId> explicit_commit) {
             ensure_active();
+
+            if (explicit_commit) {
+                if (*explicit_commit == detail::no_commit ||
+                    *explicit_commit <= owner_.commits_.max_commit_id()) {
+                    throw std::invalid_argument(
+                        "commit ID must be greater than the maximum issued ID");
+                }
+            }
 
             std::vector<detail::DiffRecord> diffs;
             std::vector<TargetId> final_targets;
             diffs.reserve(overlay_.touched().size());
             final_targets.reserve(overlay_.touched().size());
             const CommitId parent_commit = parent_.commit_id();
-            const CommitId next_commit = parent_commit + 1;
+            if (!explicit_commit &&
+                parent_commit == std::numeric_limits<CommitId>::max()) {
+                throw std::length_error("commit ID space exhausted");
+            }
+            const CommitId next_commit =
+                explicit_commit.value_or(parent_commit + 1);
 
             for (const VirtualId id : overlay_.touched()) {
                 TargetId current = detail::no_target;
@@ -255,7 +290,7 @@ public:
                 final_targets.push_back(current);
             }
 
-            if (diffs.empty()) {
+            if (diffs.empty() && !explicit_commit) {
                 discard_staged();
                 active_ = false;
                 writer_lock_.unlock();
@@ -263,8 +298,10 @@ public:
             }
 
             const std::size_t diff_count = diffs.size();
-            owner_.state_->store.reserve_reclamation(
-                created_targets_.size() + 1);
+            if (diff_count != 0) {
+                owner_.state_->store.reserve_reclamation(
+                    created_targets_.size() + 1);
+            }
 
             std::unique_lock history_lock{owner_.history_mutex_};
             if (owner_.commits_.tip_commit() != parent_commit &&
@@ -288,9 +325,18 @@ public:
             Snapshot result = owner_.make_snapshot(next_commit);
 
             owner_.apply_truncation(std::move(truncation));
+            if (diff_count == 0) {
+                discard_staged();
+            }
             builder.publish();
             owner_.checkout_commit_ = next_commit;
             history_lock.unlock();
+
+            if (diff_count == 0) {
+                active_ = false;
+                writer_lock_.unlock();
+                return result;
+            }
 
             std::vector<TargetId> transferred;
             std::vector<TargetId> acquired;
@@ -321,18 +367,6 @@ public:
             writer_lock_.unlock();
             return result;
         }
-
-        void rollback() noexcept {
-            if (!active_) {
-                return;
-            }
-            discard_staged();
-            active_ = false;
-            writer_lock_.unlock();
-        }
-
-    private:
-        friend class MVCCHive;
 
         Transaction(
             MVCCHive& owner,
@@ -416,6 +450,11 @@ public:
         return make_snapshot(checkout_commit_);
     }
 
+    [[nodiscard]] CommitId max_commit_id() const {
+        std::shared_lock lock{history_mutex_};
+        return commits_.max_commit_id();
+    }
+
     [[nodiscard]] std::optional<Snapshot> snapshot(
         CommitId id) const {
         std::shared_lock lock{history_mutex_};
@@ -468,7 +507,7 @@ public:
         }
         const CommitId parent = commits_.commit(*index).parent;
         if (parent == detail::no_commit) {
-            if (*index != 0 || commits_.first_commit_id() != 1) {
+            if (*index != 0 || commits_.cleared_floor()) {
                 throw std::logic_error(
                     "undo history has been cleared");
             }
@@ -491,29 +530,15 @@ public:
         std::unique_lock history_lock{history_mutex_};
         reap_deferred_if_idle();
 
-        CommitId next = detail::no_commit;
-        if (checkout_commit_ == detail::no_commit) {
-            next = commits_.first_commit_id();
-            if (next == detail::no_commit) {
-                return false;
-            }
-        } else {
-            if (checkout_commit_ ==
-                std::numeric_limits<CommitId>::max()) {
-                return false;
-            }
-            next = checkout_commit_ + 1;
-        }
-
-        const auto index = commits_.commit_index(next);
-        if (!index || commits_.commit(*index).parent != checkout_commit_) {
+        const auto next = commits_.next_commit(checkout_commit_);
+        if (!next) {
             return false;
         }
 
         auto cache = current_targets_.prepare_rebuild(
-            state_->rows, next);
+            state_->rows, *next);
         current_targets_.apply_rebuild(std::move(cache));
-        checkout_commit_ = next;
+        checkout_commit_ = *next;
         return true;
     }
 

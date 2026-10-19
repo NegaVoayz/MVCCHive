@@ -141,7 +141,9 @@ the checkout must remain addressable. `clear_history()` discards the redo tail
 first and keeps the checkout as its baseline.
 Undo stops at the oldest retained commit. Going below the original first
 commit to the empty origin is valid; trying to undo below a pruned or cleared
-retention floor throws and leaves the checkout unchanged.
+retention floor throws and leaves the checkout unchanged. A baseline created
+by `clear_history()` is always a cleared floor, including when its commit ID is
+1; it is never mistaken for the original first commit.
 
 `prune_before` and `clear_history` end with the same explicit reclamation
 pass. A block still referenced by a retained row node or a live snapshot is

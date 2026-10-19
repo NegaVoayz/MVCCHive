@@ -1,6 +1,6 @@
 # Implementation plan
 
-Status: version 2.1.1. M0 through M6 are implemented for the single-writer
+Status: version 2.2.0. M0 through M6 are implemented for the single-writer
 design. Multiwriter row locking remains the intentional post-1.0 boundary.
 
 The first goal is a small, testable vertical slice that proves the layout,
@@ -36,6 +36,7 @@ tests/
   concurrency_test.cpp
   model_test.cpp
   undo_redo_test.cpp
+  commit_id_test.cpp
 ```
 
 The library starts header-only because `MVCCHive<T>` and its storage layers are

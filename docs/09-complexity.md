@@ -20,7 +20,9 @@ by a commit.
 | Erase | `O(1)` commit work |
 | Swap | `O(1)` commit work, no `T` construction |
 | Commit with `k` changed IDs | `O(k)` row-version nodes |
+| Explicit commit-ID validation | `O(1)` against the monotonic high-water mark |
 | Commit-log append | `O(1)` per commit/diff using preallocated fixed-size blocks |
+| Commit-ID lookup | `O(1)` for a contiguous timeline; `O(log n)` when explicit IDs leave gaps |
 | Undo / redo checkout move | `O(V)` to rebuild the writer-only current-target cache |
 | Commit after undo | `O(V + detached future row nodes + k)`; commit/diff logs truncate in place |
 | History diff export | `O(k)` target-free `Diff` copies for the selected commit |
@@ -46,3 +48,9 @@ Indexing is one shift and mask. If an append crosses a block boundary,
 `CommitBuilder::prepare` allocates the next block; publication only writes
 inside the already-allocated block. A blocked-vector boundary test guards this
 contract.
+
+An explicit commit ID may jump forward, so the commit log is not necessarily
+dense. Lookup keeps the one-step contiguous projection as a fast path and uses
+binary search only when the projected slot does not contain the requested ID.
+The high-water commit ID is separate from the retained tip and never regresses
+through undo, pruning, or `clear_history()`.

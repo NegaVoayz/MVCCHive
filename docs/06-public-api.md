@@ -35,6 +35,7 @@ public:
     ~MVCCHive();
 
     Snapshot head() const;  // current checkout, not necessarily the tip
+    CommitId max_commit_id() const;
     std::optional<Snapshot> snapshot(CommitId id) const;
 
     Transaction begin_transaction();
@@ -117,6 +118,8 @@ invalidating a caller's range or exposing an internal `span`.
 `head()` returns the current checkout. `snapshot(id)` can inspect any retained
 commit, including the redo tail. A writable transaction must begin at the
 checkout; it cannot begin directly at an arbitrary future or historical commit.
+`max_commit_id()` returns the largest ID ever issued by this hive, including
+IDs that belong only to cleared history.
 
 ### 9.1 Transaction API
 
@@ -138,6 +141,7 @@ public:
     find(VirtualId id) const noexcept;
 
     Snapshot commit();
+    Snapshot commit(CommitId id);
     void rollback() noexcept;
 
 private:
@@ -160,6 +164,13 @@ snapshot when created. `commit()` publishes an atomic commit; `rollback()`
 destroys every version constructed only by that transaction. A transaction
 holds non-owning store and row-index references and must be completed or
 destroyed before its hive is destroyed.
+
+`commit(id)` uses a caller-supplied commit ID. The ID must be nonzero and
+strictly greater than `MVCCHive::max_commit_id()`; otherwise it throws
+`std::invalid_argument` and the transaction remains active. Unlike automatic
+IDs, explicit IDs need not be contiguous. An explicit commit with no changes
+publishes an empty commit and advances the checkout, which allows several
+hives to stay aligned on one process-global checkout ID.
 
 `replace` is the transaction spelling of the Update operation. It constructs
 a completely new version and prepends a row-version node. It never assigns
@@ -299,12 +310,19 @@ pruning or `clear_history()` is different: `undo()` throws
 `std::logic_error("undo history has been cleared" or "pruned")` and leaves the
 checkout unchanged. It never walks into erased history.
 
-A non-empty commit prepared from an older checkout discards the redo tail. The
+The distinguishability is explicit metadata, not a test for commit ID 1.
+Consequently, `clear_history()` at the first commit is still a cleared-history
+floor and throws; only the original first commit may undo to empty commit 0.
+
+A commit prepared from an older checkout publishes with a new ID and discards
+the redo tail. With automatic IDs, the new ID reuses the discarded future
+range; with an explicit ID it must exceed `max_commit_id()`. The
 new commit is prepared before the discard, so a failed prepare leaves the tail
 intact. The discard truncates the commit and diff logs in place, detaches row
 nodes newer than the checkout, and publishes the new commit as
-`checkout + 1`. If the commit is empty, `commit()` returns the parent snapshot
-and leaves redo available.
+`checkout + 1`. An argument-free empty `commit()` returns the parent snapshot
+and leaves redo available; an explicit empty `commit(id)` publishes an empty
+commit at `id`.
 
 An active snapshot pinned above the checkout makes the discard fail with
 `std::logic_error` before any mutation. Snapshots at or below the checkout
@@ -312,6 +330,29 @@ remain valid; detached row nodes and target anchors are reclaimed once no
 snapshot can traverse them. Virtual IDs remain monotonically allocated and are
 not rewound by undo. A `Diff` copied from a discarded tail remains an ordinary
 value, but its commit/virtual pair no longer identifies the same timeline entry.
+
+#### 9.1.3 Process-wide checkout alignment
+
+The hive does not own a global commit counter. A process coordinator assigns
+the next ID and passes it to each participating hive:
+
+```cpp
+const CommitId shared = coordinator.allocate();
+
+auto alpha_tx = alpha.begin_transaction();
+alpha_tx.replace(id, 42);
+static_cast<void>(alpha_tx.commit(shared));
+
+auto beta_tx = beta.begin_transaction();
+static_cast<void>(beta_tx.commit(shared));  // empty commit still advances
+```
+
+After both calls, `alpha.head().commit_id()` and `beta.head().commit_id()` are
+`shared`. A hive that receives an ID at or below its own `max_commit_id()`
+rejects the commit with `std::invalid_argument`; it cannot silently diverge.
+The coordinator must still decide what to do if one hive fails after another
+has already committed, because the hive API does not provide cross-instance
+atomicity.
 
 ### 9.2 Snapshot API
 
@@ -376,9 +417,11 @@ undo() -> checkout = parent(checkout), tail retained
 redo() -> checkout = next retained child, if any
 ```
 
-Viewing an old commit does not mutate state. A new non-empty commit from an
-older checkout discards the redo tail and starts a fresh continuation from that
-checkout; an empty commit leaves the tail intact.
+Viewing an old commit does not mutate state. A new commit from an older
+checkout discards the redo tail and starts a fresh continuation from that
+checkout. An argument-free empty commit leaves the tail intact; an explicit
+empty commit publishes at the supplied ID and therefore starts a new
+continuation.
 
 ### 9.4 Visibility boundary
 

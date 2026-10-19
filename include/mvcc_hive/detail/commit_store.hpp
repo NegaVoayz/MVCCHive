@@ -4,6 +4,7 @@
 #include <mvcc_hive/detail/blocked_vector.hpp>
 #include <mvcc_hive/detail/layout.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -43,6 +44,7 @@ struct PrunedCommitState {
     BlockedVector<CommitRecord> commits;
     BlockedVector<DiffRecord> diffs;
     CommitId first_commit_id = no_commit;
+    bool cleared_floor = false;
 };
 
 struct TruncatedCommitState {
@@ -86,6 +88,7 @@ public:
         CommitId id,
         CommitId parent,
         std::span<const DiffRecord> diffs) noexcept {
+        assert(id != no_commit);
         assert(commits_.capacity() >= commits_.size() + 1);
         assert(diffs_.capacity() >= diffs_.size() + diffs.size());
 
@@ -101,7 +104,9 @@ public:
         }
         if (commits_.size() == 1) {
             first_commit_id_ = id;
+            cleared_floor_ = false;
         }
+        max_commit_id_ = std::max(max_commit_id_, id);
     }
 
     void publish_tip(CommitId id) noexcept {
@@ -132,25 +137,77 @@ public:
         return first_commit_id_;
     }
 
+    [[nodiscard]] CommitId max_commit_id() const noexcept {
+        return max_commit_id_;
+    }
+
+    [[nodiscard]] bool cleared_floor() const noexcept {
+        return cleared_floor_;
+    }
+
     [[nodiscard]] std::optional<std::size_t> commit_index(
         CommitId id) const noexcept {
-        if (commits_.empty() ||
-            id < first_commit_id_ ||
-            id > tip_commit()) {
+        const std::size_t count = commits_.size();
+        if (count == 0) {
             return std::nullopt;
         }
 
-        const std::size_t index = static_cast<std::size_t>(
-            id - first_commit_id_);
-        if (index >= commits_.size() ||
-            commits_[index].id != id) {
+        const CommitId first = commits_[0].id;
+        const CommitId last = commits_[count - 1].id;
+        if (id < first || id > last) {
             return std::nullopt;
         }
-        return index;
+
+        // Contiguous timelines retain the original O(1) lookup. Explicit
+        // commit IDs may leave gaps, in which case the fallback is O(log n).
+        const CommitId offset = id - first;
+        if (offset < static_cast<CommitId>(count) &&
+            commits_[static_cast<std::size_t>(offset)].id == id) {
+            return static_cast<std::size_t>(offset);
+        }
+
+        std::size_t lo = 0;
+        std::size_t hi = count;
+        while (lo < hi) {
+            const std::size_t mid = lo + (hi - lo) / 2;
+            if (commits_[mid].id < id) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo == count || commits_[lo].id != id) {
+            return std::nullopt;
+        }
+        return lo;
     }
 
     [[nodiscard]] bool contains_commit(CommitId id) const noexcept {
         return id == no_commit || commit_index(id).has_value();
+    }
+
+    [[nodiscard]] std::optional<CommitId> next_commit(
+        CommitId parent) const noexcept {
+        const std::size_t count = commits_.size();
+        if (count == 0) {
+            return std::nullopt;
+        }
+        if (parent == no_commit) {
+            if (commits_[0].parent != no_commit) {
+                return std::nullopt;
+            }
+            return commits_[0].id;
+        }
+
+        const auto index = commit_index(parent);
+        if (!index || *index + 1 >= count) {
+            return std::nullopt;
+        }
+        const CommitRecord& next = commits_[*index + 1];
+        if (next.parent != parent) {
+            return std::nullopt;
+        }
+        return next.id;
     }
 
     [[nodiscard]] const CommitRecord& commit(
@@ -201,6 +258,7 @@ public:
             state.diffs.push_back(diffs_[index]);
         }
         state.first_commit_id = first;
+        state.cleared_floor = cleared_floor_;
         return state;
     }
 
@@ -219,6 +277,7 @@ public:
             .diff_count = 0,
         });
         state.first_commit_id = baseline;
+        state.cleared_floor = true;
         return state;
     }
 
@@ -267,6 +326,7 @@ public:
         commits_.swap(state.commits);
         diffs_.swap(state.diffs);
         first_commit_id_ = state.first_commit_id;
+        cleared_floor_ = state.cleared_floor;
     }
 
     void apply_truncate(TruncatedCommitState&& state) noexcept {
@@ -280,6 +340,9 @@ public:
             state.retained_diffs,
             state.diff_capacity);
         first_commit_id_ = state.first_commit_id;
+        if (state.retained_commits == 0) {
+            cleared_floor_ = false;
+        }
         tip_commit_.store(state.tip_commit, std::memory_order_release);
     }
 
@@ -288,6 +351,8 @@ public:
         diffs_.clear();
         tip_commit_.store(no_commit, std::memory_order_release);
         first_commit_id_ = no_commit;
+        max_commit_id_ = no_commit;
+        cleared_floor_ = false;
     }
 
 private:
@@ -295,6 +360,8 @@ private:
     BlockedVector<DiffRecord> diffs_;
     std::atomic<CommitId> tip_commit_{no_commit};
     CommitId first_commit_id_ = no_commit;
+    CommitId max_commit_id_ = no_commit;
+    bool cleared_floor_ = false;
 };
 
 }  // namespace mvcc_hive::detail

@@ -87,10 +87,19 @@
 - Undo from the original first commit reaches the empty origin; undo from a
   fresh empty hive returns false.
 - Undo at a pruned or `clear_history()` retention floor throws
-  `std::logic_error` and leaves the checkout unchanged.
+  `std::logic_error` and leaves the checkout unchanged. This includes a
+  `clear_history()` baseline whose commit ID is 1.
 - A replace after undo publishes a new commit at the checkout's next ID,
   removes the old future diffs, and makes `redo()` return false.
 - An empty commit after undo preserves the redo tail.
+- Caller-supplied commit IDs may be sparse and can align multiple hives on the
+  same checkout ID; an explicit empty commit advances an otherwise unchanged
+  hive.
+- An explicit ID at or below the hive's high-water mark throws
+  `std::invalid_argument`, leaves the checkout unchanged, and leaves the
+  transaction active for retry.
+- Sparse commit IDs resolve correctly across snapshot lookup, undo, redo, and
+  pruning, including gaps that are not commits.
 - An active snapshot above the checkout rejects a tail-discarding commit before
   any row head changes; releasing that snapshot allows a later commit to
   proceed.

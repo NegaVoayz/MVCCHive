@@ -41,6 +41,10 @@ slot swapping disappear entirely.
 - Virtual IDs are monotonic and are not recycled.
 - Undo/redo move the linear checkout, not inverse payload operations. A redo
   tail is retained until a new commit is published from the checkout.
+- Commit IDs are normally automatic and contiguous. A caller-supplied ID may
+  jump forward, so the commit log supports both O(1) contiguous lookup and an
+  O(log n) sparse lookup; the high-water mark is independent of the retained
+  tip.
 - Historical reads are first-class immutable snapshots.
 - The internal diff log is a row-target change log:
   `commit_id, virtual_id, previous_target, current_target`. Public history
